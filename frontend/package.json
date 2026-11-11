@@ -1,18 +1,23 @@
 {
   "name": "campus-shield",
   "private": true,
-  "version": "2.5.0",
+  "version": "2.6.0",
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "oxlint && node scripts/lint-tokens.js --foundations",
-    "lint:tokens": "node scripts/lint-tokens.js",
-    "lint:tokens:strict": "node scripts/lint-tokens.js --foundations",
+    "build:mobile": "vite build --mode mobile",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint && node scripts/lint-tokens.ts --foundations",
+    "lint:tokens": "node scripts/lint-tokens.ts",
+    "lint:tokens:strict": "node scripts/lint-tokens.ts --foundations",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
     "framer-motion": "^14.12.0",
     "lucide-react": "^1.72.0",
     "react": "^19.3.1",
@@ -26,6 +31,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "oxlint": "^1.90.0",
     "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
     "vite": "^8.3.6"
   }
 }

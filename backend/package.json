@@ -1,14 +1,15 @@
 {
   "name": "quad-backend",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Quad Campus Fastify + SQLite Backend",
-  "main": "index.js",
+  "description": "Quad Campus Fastify + SQLite Backend (TypeScript)",
+  "main": "src/server.ts",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "test": "node --test tests/*.test.js"
+    "start": "node src/server.ts",
+    "dev": "node --watch src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts"
   },
   "keywords": [],
   "type": "module",
@@ -16,5 +17,9 @@
     "@fastify/cors": "^11.4.1",
     "@fastify/multipart": "^10.1.8",
     "fastify": "^5.12.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
   }
 }
