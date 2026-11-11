@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: var(--color-canvas);
+  --color-ink: var(--color-ink);
+  --color-accent: var(--color-accent);
+  --color-danger: var(--color-danger);
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+
+  /* Radius tokens: 8px controls, 12px cards, full pills */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-full: 9999px;
+
+  /* Motion tokens: 3 durations, 1 easing */
+  --ease-quad: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 350ms;
+}
+
+:root {
+  --color-canvas: #FFFFFF;
+  --color-ink: #111111;
+  --color-accent: #0A7FEA;
+  --color-danger: #E5322D;
+
+  --ease-quad: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 350ms;
+}
+
+.dark {
+  --color-canvas: #0B0B0C;
+  --color-ink: #F5F5F5;
+  --color-accent: #4DA6FF;
+  --color-danger: #FF5A52;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --color-canvas: #0B0B0C;
+    --color-ink: #F5F5F5;
+    --color-accent: #4DA6FF;
+    --color-danger: #FF5A52;
+  }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Base styles */
+* {
+  -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .font-display {
+  font-family: 'Space Grotesk', var(--font-sans);
+}
+
+/* Min Touch Target class */
+.tap-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Custom scrollbars with neutral ink tint */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-ink) 12%, transparent);
+  border-radius: 9999px;
+}
+
+/* Hide scrollbar for clean snap feeds */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Hide scrollbars unless hovered */
+.scrollbar-hover {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hover::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.scrollbar-hover:hover {
+  scrollbar-width: thin;
+}
+.scrollbar-hover:hover::-webkit-scrollbar {
+  width: 6px;
+}

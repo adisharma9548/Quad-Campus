@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <style>
+    .tile { fill: #0A7FEA; }
+    .bubble { fill: #FFFFFF; }
+    .keyhole { fill: #0A7FEA; }
+    @media (prefers-color-scheme: dark) {
+      .tile { fill: #4DA6FF; }
+      .bubble { fill: #0B0B0C; }
+      .keyhole { fill: #4DA6FF; }
+    }
+  </style>
+  <rect class="tile" x="0" y="0" width="512" height="512" rx="112" fill="#0A7FEA"/>
+  <path class="bubble" d="M186 120 H326 A70 70 0 0 1 396 190 V260 A70 70 0 0 1 326 330 H250 L172 392 V330 H186 A70 70 0 0 1 116 260 V190 A70 70 0 0 1 186 120 Z" fill="#FFFFFF"/>
+  <circle class="keyhole" cx="256" cy="208" r="30" fill="#0A7FEA"/>
+  <path class="keyhole" d="M236 230 L276 230 L286 282 H226 Z" fill="#0A7FEA"/>
+</svg>

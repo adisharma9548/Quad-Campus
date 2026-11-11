@@ -1,0 +1,35 @@
+# Dependencies & Build Outputs
+node_modules/
+dist/
+dist-ssr/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local Secrets & SQLite Runtime Data
+backend/.env
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+.env.local
+.env.*.local
+
+# OS & Editor Artifacts
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.sw?
+
+# Root Scratch Inspection Files
+/audit_colors.js
+/extracted_template.html
+/inspect_logo.js

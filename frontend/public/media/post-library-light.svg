@@ -1,0 +1,21 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1280 720' width='1280' height='720'>
+  <rect width='1280' height='720' fill='#F3F3F4'/>
+  <g stroke='#DEDEDF' stroke-width='2'>
+    <line x1='0' y1='180' x2='1280' y2='180'/><line x1='0' y1='360' x2='1280' y2='360'/><line x1='0' y1='540' x2='1280' y2='540'/>
+    <line x1='320' y1='0' x2='320' y2='720'/><line x1='640' y1='0' x2='640' y2='720'/><line x1='960' y1='0' x2='960' y2='720'/>
+  </g>
+  <rect x='160' y='460' width='960' height='28' rx='8' fill='#FFFFFF' stroke='#111111' stroke-width='4'/>
+  <rect x='220' y='488' width='24' height='152' fill='#111111' opacity='0.2'/>
+  <rect x='1036' y='488' width='24' height='152' fill='#111111' opacity='0.2'/>
+  <rect x='460' y='280' width='360' height='166' rx='12' fill='#FFFFFF' stroke='#111111' stroke-width='4'/>
+  <rect x='480' y='300' width='320' height='126' rx='6' fill='#F3F3F4'/>
+  <path d='M430 446 H850 L875 460 H405 Z' fill='#111111'/>
+  <rect x='505' y='324' width='140' height='14' rx='4' fill='#0A7FEA'/>
+  <rect x='505' y='352' width='210' height='10' rx='4' fill='#111111' opacity='0.35'/>
+  <rect x='505' y='374' width='180' height='10' rx='4' fill='#111111' opacity='0.25'/>
+  <rect x='220' y='422' width='160' height='38' rx='6' fill='#FFFFFF' stroke='#111111' stroke-width='3'/>
+  <rect x='236' y='388' width='134' height='34' rx='6' fill='#0A7FEA' opacity='0.18' stroke='#0A7FEA' stroke-width='3'/>
+  <rect x='920' y='310' width='130' height='150' rx='10' fill='#FFFFFF' stroke='#111111' stroke-width='3'/>
+  <circle cx='985' cy='385' r='30' fill='#0A7FEA' opacity='0.14' stroke='#0A7FEA' stroke-width='3'/>
+  <path d='M972 385 h26 m-13 -13 v26' stroke='#0A7FEA' stroke-width='4' stroke-linecap='round'/>
+</svg>
