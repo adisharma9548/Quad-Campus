@@ -116,30 +116,7 @@ export default function ThreadCommentNode({
     }
   };
 
-  // Reported comment collapsed/blurred state (used in Part 4)
-  if (node.reportedByMe && !node.isDeleted) {
-    return (
-      <div
-        id={`thread-comment-${node.id}`}
-        className={`rounded-[10px] border border-ink/12 bg-ink/4 p-3 flex items-center justify-between gap-3 ${
-          isHighlighted ? 'ring-2 ring-accent bg-accent/10' : ''
-        }`}
-      >
-        <p className="text-xs text-ink/60 blur-[2px] select-none truncate">
-          Reported comment hidden from your view
-        </p>
-        {onUndoReport && (
-          <button
-            type="button"
-            onClick={() => onUndoReport(threadId, node)}
-            className="text-xs font-bold text-accent hover:underline cursor-pointer shrink-0 min-h-[32px] px-2"
-          >
-            Undo
-          </button>
-        )}
-      </div>
-    );
-  }
+  void onUndoReport;
 
   return (
     <div id={`thread-comment-${node.id}`} className="relative">
