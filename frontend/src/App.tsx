@@ -490,14 +490,14 @@ function AppShell() {
   return (
     <div className="min-h-screen bg-canvas text-ink transition-colors duration-250 flex flex-col font-sans antialiased">
       {/* ═══════════ GLOBAL WEB TOPBAR ═══════════ */}
-      <header className="sticky top-0 z-40 bg-canvas border-b border-ink/12 px-4 lg:px-8 py-3">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-40 bg-canvas border-b border-ink/12 px-6 lg:px-8 py-3">
+        <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
           {/* Left Brand Identity: Logo mark + "Quad" wordmark */}
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => navigate(isAuthenticated ? 'feed' : 'welcome')}
-              className="min-h-[44px] flex items-center gap-3 text-left cursor-pointer rounded-[8px] px-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="min-h-[44px] flex items-center gap-3 text-left cursor-pointer rounded-[8px] pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               <QuadLogo size={32} />
               <span className="font-display font-bold text-lg tracking-tight text-ink leading-none">
@@ -729,7 +729,7 @@ function AppShell() {
       </header>
 
       {/* ═══════════ MAIN CONTENT BODY ═══════════ */}
-      <div className="flex-1 w-full max-w-[1400px] mx-auto px-4 lg:px-8 py-6">
+      <div className="flex-1 w-full max-w-[1600px] mx-auto px-6 lg:px-8 py-6">
         {/* If viewing Auth Screens, display centered web layout */}
         {isAuthScreen ? (
           ['welcome', 'signup', 'login', 'forgot_password'].includes(currentScreen) ? (
@@ -835,7 +835,7 @@ function AppShell() {
 
             {/* ──── COLUMN 2: CENTER FLEXIBLE COLUMN ──── */}
             <main className="min-w-0 w-full pb-12 mb-8 md:pb-6 md:mb-0">
-              <div className="w-full max-w-[740px] mx-auto">
+              <div className="w-full">
                 <CurrentComponent
                   onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
                   onNavigate={navigate}
