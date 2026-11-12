@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 
 import { buildApp } from '../src/app.ts';
-import { FFMPEG_PATH } from '../src/config/constants.ts';
+import { ADMIN_EMAIL, FFMPEG_PATH, SEED_ADMIN_PASSWORD } from '../src/config/constants.ts';
 import { sanitizeUploadedVideo } from '../src/utils/videoStripper.ts';
 
 function generateRealVideoBuffer(tmpDir: string, durationSec: number, withGps = false): Buffer {
@@ -118,12 +118,18 @@ function buildMultipartBody(
 describe('Part 5: Reels Video Sanitizer & Upload Flow', () => {
   let app: FastifyInstance;
   let tmpDir: string;
+  let uploadDir = '';
   let tokenAuthor = '';
   let tokenOther = '';
 
   before(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quad-reels-test-'));
-    const built = await buildApp({ dbPath: path.join(tmpDir, 'test.db'), logger: false });
+    uploadDir = path.join(tmpDir, 'uploads');
+    const built = await buildApp({
+      dbPath: path.join(tmpDir, 'test.db'),
+      uploadDir,
+      logger: false,
+    });
     app = built.app;
 
     const r1 = await app.inject({
@@ -379,5 +385,185 @@ describe('Part 5: Reels Video Sanitizer & Upload Flow', () => {
       headers: { Authorization: `Bearer ${tokenOther}` },
     });
     assert.equal(mediaForbidden.statusCode, 403);
+  });
+
+  test('Phase 5.5: enforces reel delete auth, retains media on open report for admin, and filters peer profile reels by visibility', async () => {
+    const uploadShortReel = async (audience: 'campus' | 'followers', caption: string) => {
+      const mp4 = generateRealVideoBuffer(tmpDir, 4, false);
+      const form = buildMultipartBody(
+        [
+          { name: 'caption', value: caption },
+          { name: 'durationSec', value: '4' },
+          { name: 'trimStart', value: '0' },
+          { name: 'trimEnd', value: '4' },
+          { name: 'audience', value: audience },
+          { name: 'commentsEnabled', value: 'true' },
+        ],
+        [{ name: 'video', filename: `${audience}.mp4`, contentType: 'video/mp4', data: mp4 }]
+      );
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/reels',
+        headers: {
+          Authorization: `Bearer ${tokenAuthor}`,
+          'content-type': form.contentType,
+        },
+        payload: form.payload,
+      });
+      assert.equal(res.statusCode, 201);
+      const { id } = res.json() as { id: string };
+      for (let i = 0; i < 60; i += 1) {
+        const poll = await app.inject({
+          method: 'GET',
+          url: `/api/v1/reels/${id}`,
+          headers: { Authorization: `Bearer ${tokenAuthor}` },
+        });
+        const body = poll.json() as { id: string; status: string; videoUrl: string; thumbnailUrl: string };
+        if (body.status === 'active') return body;
+        assert.notEqual(body.status, 'failed');
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.fail(`Timed out waiting for reel ${id}`);
+    };
+
+    const campusReel = await uploadShortReel('campus', 'Campus lab demo');
+    const followersReel = await uploadShortReel('followers', 'Followers-only sneak peek');
+
+    // Insert a processing reel via upload? Verify peer profile hides followers reel for non-follower
+    const profileBeforeFollow = await app.inject({
+      method: 'GET',
+      url: '/api/v1/users/reel_creator/profile',
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    assert.equal(profileBeforeFollow.statusCode, 200);
+    const beforeReels = (profileBeforeFollow.json() as { reels: Array<{ id: string }> }).reels;
+    assert.equal(beforeReels.some((r) => r.id === campusReel.id), true);
+    assert.equal(beforeReels.some((r) => r.id === followersReel.id), false);
+
+    // Follow reel_creator and accept request -> followers reel now visible in peer profile
+    const followReq = await app.inject({
+      method: 'POST',
+      url: '/api/v1/follow-requests',
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: { targetUsername: 'reel_creator' },
+    });
+    assert.equal(followReq.statusCode, 200);
+    const overviewRes = (
+      await app.inject({
+        method: 'GET',
+        url: '/api/v1/social/overview',
+        headers: { Authorization: `Bearer ${tokenAuthor}` },
+      })
+    ).json() as { followRequests: Array<{ id: string; username: string }> };
+    const reqFromViewer = overviewRes.followRequests.find((r) => r.username === 'reel_viewer');
+    assert.ok(reqFromViewer);
+    const acceptRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/follow-requests/${reqFromViewer.id}/respond`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+      payload: { action: 'accept', group: 'Classmates' },
+    });
+    assert.equal(acceptRes.statusCode, 200);
+
+    const profileAfterFollow = await app.inject({
+      method: 'GET',
+      url: '/api/v1/users/reel_creator/profile',
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    assert.equal(profileAfterFollow.statusCode, 200);
+    const afterReels = (profileAfterFollow.json() as { reels: Array<{ id: string }> }).reels;
+    assert.equal(afterReels.some((r) => r.id === campusReel.id), true);
+    assert.equal(afterReels.some((r) => r.id === followersReel.id), true);
+
+    // Non-owner cannot delete another student's reel (403)
+    const forbidDel = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/reels/${followersReel.id}`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    assert.equal(forbidDel.statusCode, 403);
+
+    // Owner deletes unreported followersReel -> 200, media dir deleted, GET returns 404
+    const followersDir = path.join(uploadDir, 'reels', followersReel.id);
+    assert.equal(fs.existsSync(followersDir), true);
+    const okDel = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/reels/${followersReel.id}`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(okDel.statusCode, 200);
+    assert.equal(okDel.json().deleted, true);
+    assert.equal(okDel.json().retainedForModeration, false);
+    assert.equal(fs.existsSync(followersDir), false);
+
+    const deletedGet = await app.inject({
+      method: 'GET',
+      url: `/api/v1/reels/${followersReel.id}`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(deletedGet.statusCode, 404);
+
+    // Deleted reel never appears on peer profile
+    const profileAfterDel = await app.inject({
+      method: 'GET',
+      url: '/api/v1/users/reel_creator/profile',
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    const postDelReels = (profileAfterDel.json() as { reels: Array<{ id: string }> }).reels;
+    assert.equal(postDelReels.some((r) => r.id === followersReel.id), false);
+
+    // Report campusReel, then owner deletes -> retainedForModeration: true, hidden from normal users, readable by admin
+    const reportRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/reports',
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: {
+        targetType: 'reel',
+        targetId: campusReel.id,
+        reason: 'Inappropriate content',
+      },
+    });
+    assert.equal(reportRes.statusCode, 201);
+
+    const campusDir = path.join(uploadDir, 'reels', campusReel.id);
+    const delReported = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/reels/${campusReel.id}`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(delReported.statusCode, 200);
+    assert.equal(delReported.json().deleted, true);
+    assert.equal(delReported.json().retainedForModeration, true);
+    assert.equal(fs.existsSync(campusDir), true);
+
+    // Hidden from normal users (even author)
+    const studentMediaAfterDel = await app.inject({
+      method: 'GET',
+      url: campusReel.videoUrl,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(studentMediaAfterDel.statusCode, 403);
+
+    // Admin can still view retained media for open report moderation
+    const adminLogin = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: { identifier: ADMIN_EMAIL, password: SEED_ADMIN_PASSWORD },
+    });
+    assert.equal(adminLogin.statusCode, 200);
+    const adminToken = (adminLogin.json() as { session: { token: string } }).session.token;
+
+    const adminVideo = await app.inject({
+      method: 'GET',
+      url: campusReel.videoUrl,
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(adminVideo.statusCode, 200);
+    const adminThumb = await app.inject({
+      method: 'GET',
+      url: campusReel.thumbnailUrl,
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(adminThumb.statusCode, 200);
   });
 });
