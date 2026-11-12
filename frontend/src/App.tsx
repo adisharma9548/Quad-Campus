@@ -34,6 +34,7 @@ import NotFoundPage from './screens/NotFoundPage';
 import { QuadLogo } from './components/QuadLogo';
 import { Avatar, Badge, Modal, Spinner } from './components/ui';
 import { SidebarItem } from './components/SidebarItem';
+import { SlimRailNav } from './components/SlimRailNav';
 import { ThisWeekCard } from './components/ThisWeekCard';
 import { PeerProfileModal } from './components/PeerProfileModal';
 import { CreatePostModal } from './screens/CreatePostScreen';
@@ -279,6 +280,7 @@ function AppShell() {
   const [selectedWeekItem, setSelectedWeekItem] = useState<ThisWeekEvent | null>(null);
   const [requestedPeerIds, setRequestedPeerIds] = useState<Set<string | number>>(() => new Set());
   const [selectedProfilePeer, setSelectedProfilePeer] = useState<PeerUser | null>(null);
+  const [reelsControlsVisible, setReelsControlsVisible] = useState(true);
   const { dark, toggle } = useTheme();
   const { state, markReelsSeen, requestFollow } = useApp();
   const showDevSwitcher =
@@ -319,6 +321,18 @@ function AppShell() {
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Sync Reels mobile tabbar visibility with Reels player controls
+  useEffect(() => {
+    const onControlsEvent = (event: Event) => {
+      const custom = event as CustomEvent<boolean>;
+      setReelsControlsVisible(Boolean(custom.detail));
+    };
+    window.addEventListener('quad:reels-controls-visible', onControlsEvent as EventListener);
+    return () => {
+      window.removeEventListener('quad:reels-controls-visible', onControlsEvent as EventListener);
+    };
   }, []);
 
   const navigateToPath = (path: string) => {
@@ -401,6 +415,7 @@ function AppShell() {
 
   const CurrentComponent = SCREENS[currentScreen]?.comp || PublicFeedScreen;
   const isAuthScreen = SCREENS[currentScreen]?.isAuth;
+  const isReelsPage = currentScreen === 'reels' && isAuthenticated && !isAuthScreen;
 
   const spotlightPeers = useMemo(() => {
     const source = (state.whoToFollow && state.whoToFollow.length > 0
@@ -492,7 +507,13 @@ function AppShell() {
   return (
     <div className="min-h-screen bg-canvas text-ink transition-colors duration-250 flex flex-col font-sans antialiased">
       {/* ═══════════ GLOBAL WEB TOPBAR ═══════════ */}
-      <header className="sticky top-0 z-40 bg-canvas border-b border-ink/12 px-6 lg:px-8 py-3">
+      <header
+        className={
+          isReelsPage
+            ? 'quad-floating-header--reels px-4 lg:px-6 py-3'
+            : 'sticky top-0 z-40 bg-canvas border-b border-ink/12 px-6 lg:px-8 py-3'
+        }
+      >
         <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
           {/* Left Brand Identity: Logo mark + "Quad" wordmark */}
           <div className="flex items-center gap-3">
@@ -731,7 +752,13 @@ function AppShell() {
       </header>
 
       {/* ═══════════ MAIN CONTENT BODY ═══════════ */}
-      <div className="flex-1 w-full max-w-[1600px] mx-auto px-6 lg:px-8 py-6">
+      <div
+        className={
+          isReelsPage
+            ? 'flex-1 w-full mx-0 px-0 py-0'
+            : 'flex-1 w-full max-w-[1600px] mx-auto px-6 lg:px-8 py-6'
+        }
+      >
         {/* If viewing Auth Screens, display centered web layout */}
         {isAuthScreen ? (
           ['welcome', 'signup', 'login', 'forgot_password'].includes(currentScreen) ? (
@@ -780,8 +807,24 @@ function AppShell() {
         ) : (
           /* Responsive Web App Layout (>=1100px 3-col, or 2-col on Reels without right rail) */
           <div className={`quad-shell-grid ${currentScreen === 'reels' ? 'quad-shell-grid--reels' : ''}`}>
-            {/* ──── COLUMN 1: LEFT NAVIGATION SIDEBAR (768-1023px icon-only, 1024px+ 240px) ──── */}
-            <aside className="hidden md:flex md:flex-col w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
+            {/* ──── COLUMN 1: LEFT NAVIGATION SIDEBAR (768-1023px icon-only, 1024px+ 240px, Reels 72px slim) ──── */}
+            <aside
+              className={
+                isReelsPage
+                  ? 'hidden md:flex md:flex-col sticky self-start quad-aside--reels'
+                  : 'hidden md:flex md:flex-col w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6'
+              }
+            >
+              {isReelsPage ? (
+                <SlimRailNav
+                  currentScreen={currentScreen}
+                  unseenReelsCount={unseenReelsCount}
+                  followRequestCount={followRequestCount}
+                  onNavigate={navigate}
+                  footer={<QuadLegalFooter onNavigate={navigate} />}
+                />
+              ) : (
+                <>
               <nav aria-label="Primary campus navigation" className="space-y-1 w-full">
                 <SidebarItem
                   icon={Compass}
@@ -834,15 +877,12 @@ function AppShell() {
                 />
               </nav>
 
-              {currentScreen === 'reels' && (
-                <div className="hidden lg:block mt-6 pt-3 border-t border-ink/12 px-2">
-                  <QuadLegalFooter onNavigate={navigate} />
-                </div>
+                </>
               )}
             </aside>
 
             {/* ──── COLUMN 2: CENTER FLEXIBLE COLUMN ──── */}
-            <main className="min-w-0 w-full pb-12 mb-8 md:pb-6 md:mb-0">
+            <main className={isReelsPage ? 'min-w-0 w-full quad-main--reels' : 'min-w-0 w-full pb-12 mb-8 md:pb-6 md:mb-0'}>
               <div className="w-full">
                 <CurrentComponent
                   onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
@@ -1014,7 +1054,11 @@ function AppShell() {
         <nav
           aria-label="Mobile bottom navigation"
           style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}
-          className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-canvas border-t border-ink/12 px-2 pt-2 flex items-center justify-around"
+          className={`md:hidden fixed bottom-0 inset-x-0 z-40 px-2 pt-2 flex items-center justify-around ${
+            isReelsPage
+              ? `quad-mobile-tabbar--reels ${!reelsControlsVisible ? 'quad-mobile-tabbar--hidden' : ''}`
+              : 'bg-canvas border-t border-ink/12'
+          }`}
         >
           {[
             { id: 'feed', label: 'Feed', icon: Compass },

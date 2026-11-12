@@ -687,8 +687,8 @@ export default function ReelCommentsPanel({
 
   return (
     <>
-      {/* Desktop (>=1100px): 340px right-hand comments card */}
-      <div className="quad-reel-comments-desktop h-[calc(100dvh-136px)] min-h-[440px] max-h-[780px]">
+      {/* Desktop: 340px right-hand comments card below floating header */}
+      <div className="quad-reel-comments-desktop quad-reel-comments-desktop-slot min-h-[440px]">
         {panelBody}
       </div>
 

@@ -272,3 +272,210 @@ body::-webkit-scrollbar {
     display: none;
   }
 }
+
+
+/* Part A: Full-height 100dvh Reels shell, floating header, slim left rail & transparent mobile tabbar */
+.quad-shell-grid.quad-shell-grid--reels {
+  gap: 0;
+}
+
+@media (min-width: 768px) {
+  .quad-shell-grid.quad-shell-grid--reels {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 0;
+    align-items: stretch;
+  }
+}
+
+@media (min-width: 1024px) {
+  .quad-shell-grid.quad-shell-grid--reels {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
+@media (min-width: 1100px) {
+  .quad-shell-grid.quad-shell-grid--reels {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 0;
+  }
+}
+
+.quad-main--reels {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.quad-aside--reels {
+  width: 72px;
+  padding-top: 80px;
+  padding-bottom: 16px;
+  height: 100dvh;
+  max-height: 100dvh;
+  top: 0;
+  align-items: center;
+  overflow: visible;
+}
+
+.quad-floating-header--reels {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  pointer-events: none;
+  background: transparent;
+  border-bottom-color: transparent;
+}
+
+.quad-header-interactive {
+  pointer-events: auto;
+}
+
+.quad-floating-header-chip {
+  border-radius: 9999px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(8px);
+}
+
+html.dark .quad-floating-header-chip {
+  background: rgba(15, 23, 42, 0.84);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+}
+
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+  .quad-floating-header-chip {
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  html.dark .quad-floating-header-chip {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+.quad-mobile-tabbar--reels {
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.56), rgba(0, 0, 0, 0.16) 65%, transparent);
+  border-top-color: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  transition: opacity 160ms ease;
+}
+
+.quad-mobile-tabbar--reels button {
+  color: rgba(255, 255, 255, 0.85);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+}
+
+.quad-mobile-tabbar--reels button[aria-current="page"] {
+  color: #ffffff;
+}
+
+.quad-mobile-tabbar--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.quad-slim-rail-tooltip {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 50;
+}
+
+.group:hover > .quad-slim-rail-tooltip,
+.group:focus-visible > .quad-slim-rail-tooltip {
+  opacity: 1;
+}
+
+.quad-reel-viewport {
+  height: 100dvh;
+  min-height: 440px;
+}
+
+.quad-reel-comments-desktop-slot {
+  margin-top: 80px;
+  height: calc(100dvh - 96px);
+  max-height: calc(100dvh - 96px);
+}
+
+.quad-slim-info-popover {
+  width: 224px;
+}
+
+.quad-floating-header--reels button,
+.quad-floating-header--reels a,
+.quad-floating-header--reels [role="menu"],
+.quad-floating-header--reels [role="dialog"] {
+  pointer-events: auto;
+}
+
+.quad-floating-header--reels .quad-header-chip-bar {
+  border-radius: 9999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(8px);
+}
+
+html.dark .quad-floating-header--reels .quad-header-chip-bar {
+  background: rgba(15, 23, 42, 0.84);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+}
+
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+  .quad-floating-header--reels .quad-header-chip-bar {
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    padding: 0;
+  }
+
+  html.dark .quad-floating-header--reels .quad-header-chip-bar {
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+.quad-floating-header--reels > div {
+  max-width: none;
+}
+
+.quad-floating-header--reels > div > button:first-child,
+.quad-floating-header--reels > div > div:last-child {
+  border-radius: 9999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+}
+
+html.dark .quad-floating-header--reels > div > button:first-child,
+html.dark .quad-floating-header--reels > div > div:last-child {
+  background: rgba(15, 23, 42, 0.84);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+}
+
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+  .quad-floating-header--reels > div > button:first-child,
+  .quad-floating-header--reels > div > div:last-child {
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  html.dark .quad-floating-header--reels > div > button:first-child,
+  html.dark .quad-floating-header--reels > div > div:last-child {
+    background: transparent;
+    box-shadow: none;
+  }
+}

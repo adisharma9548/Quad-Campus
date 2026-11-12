@@ -1047,7 +1047,7 @@ export default function ReelsScreen({
         ref={containerRef}
         role="region"
         aria-label="Vertical Campus Reels feed"
-        className="flex-1 min-w-0 h-[calc(100dvh-168px)] md:h-[calc(100dvh-136px)] min-h-[440px] max-h-[780px] overflow-y-scroll snap-y snap-mandatory no-scrollbar flex flex-col items-center"
+        className="flex-1 min-w-0 quad-reel-viewport overflow-y-scroll snap-y snap-mandatory no-scrollbar flex flex-col items-center"
         style={{ scrollSnapType: 'y mandatory', WebkitOverflowScrolling: 'touch' }}
       >
         {reels.map((reel) => (
