@@ -72,7 +72,6 @@ export function ReelCard({
 }: ReelCardProps) {
   const shouldReduceMotion = useReducedMotion();
   const [userPaused, setUserPaused] = useState(false);
-  const [flashIcon, setFlashIcon] = useState<'play' | null>(null);
   const [showHeartPop, setShowHeartPop] = useState(false);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [videoDurationSec, setVideoDurationSec] = useState<number | null>(
@@ -90,7 +89,6 @@ export function ReelCard({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bgVideoRef = useRef<HTMLVideoElement | null>(null);
   const seekTrackRef = useRef<HTMLDivElement | null>(null);
-  const flashTimerRef = useRef<number | null>(null);
   const hideControlsTimerRef = useRef<number | null>(null);
   const lastTapRef = useRef(0);
 
@@ -216,7 +214,6 @@ export function ReelCard({
       const resetTimer = setTimeout(() => {
         setUserPaused(false);
         setIsBuffering(false);
-        setFlashIcon(null);
         setIsPlayerHovered(false);
         setIsFocusWithin(false);
         setControlsAwake(true);
@@ -226,21 +223,8 @@ export function ReelCard({
     return undefined;
   }, [clearHideControlsTimer, isInView]);
 
-  const triggerPlayFlash = useCallback(() => {
-    if (shouldReduceMotion) return;
-    if (flashTimerRef.current) {
-      window.clearTimeout(flashTimerRef.current);
-    }
-    setFlashIcon('play');
-    flashTimerRef.current = window.setTimeout(() => {
-      setFlashIcon(null);
-      flashTimerRef.current = null;
-    }, 240);
-  }, [shouldReduceMotion]);
-
   useEffect(() => {
     return () => {
-      if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
       clearHideControlsTimer();
     };
   }, [clearHideControlsTimer]);
@@ -248,16 +232,8 @@ export function ReelCard({
   const togglePlayPause = useCallback(() => {
     if (!hasRealVideo || videoError) return;
     wakeControls();
-    setUserPaused((prev) => {
-      const nextPaused = !prev;
-      if (!nextPaused) {
-        triggerPlayFlash();
-      } else {
-        setFlashIcon(null);
-      }
-      return nextPaused;
-    });
-  }, [hasRealVideo, triggerPlayFlash, videoError, wakeControls]);
+    setUserPaused((prev) => !prev);
+  }, [hasRealVideo, videoError, wakeControls]);
 
   const seekToTime = useCallback(
     (targetTime: number) => {
@@ -342,6 +318,18 @@ export function ReelCard({
   };
 
   const controlsVisible = !isPlaying || isFocusWithin || isDraggingSeek || controlsAwake;
+  useEffect(() => {
+    if (!isInView) return undefined;
+    window.dispatchEvent(new CustomEvent('quad:reels-controls-visible', { detail: controlsVisible }));
+    return undefined;
+  }, [controlsVisible, isInView]);
+
+  useEffect(() => {
+    return () => {
+      window.dispatchEvent(new CustomEvent('quad:reels-controls-visible', { detail: true }));
+    };
+  }, []);
+
   const extraHashtags = (reel.hashtags || []).filter(
     (tag) => !(reel.caption || '').toLowerCase().includes(`#${tag.toLowerCase()}`)
   );
@@ -373,7 +361,7 @@ export function ReelCard({
           setIsFocusWithin(false);
         }
       }}
-      className="h-full max-h-full aspect-[9/16] max-w-full rounded-[16px] bg-canvas border border-ink/12 overflow-hidden relative flex flex-col justify-end p-4 pb-4 select-none text-ink"
+      className="quad-reel-phone-stage h-full max-h-full aspect-[9/16] max-w-full rounded-[16px] bg-canvas border border-ink/12 overflow-hidden relative flex flex-col justify-end p-4 pb-4 select-none text-ink"
     >
       {/* Interactive Video Stage (prevents native right-click video menu) */}
       <div
@@ -539,44 +527,42 @@ export function ReelCard({
         )}
 
         {/* Paused Overlay: ONLY one translucent centered Play button, zero grey veil/wash */}
+        {/* Paused Overlay Cluster: Mute stacked cleanly above centered Play (no circles, no tint) */}
         <AnimatePresence>
-          {hasRealVideo && !videoError && !isPlaying && (
+          {hasRealVideo && !videoError && !isPlaying && !isBuffering && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: shouldReduceMotion ? 0 : 0.12 }}
-              className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"
+              className="quad-reel-pause-cluster absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 pointer-events-none"
             >
+              <button
+                type="button"
+                data-testid="reel-paused-mute"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  wakeControls();
+                  onToggleMute();
+                }}
+                aria-pressed={!isMuted}
+                aria-label={isMuted ? 'Unmute reel audio' : 'Mute reel audio'}
+                className="pointer-events-auto min-h-[44px] min-w-[44px] flex items-center justify-center quad-reel-overlay-icon cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                {isMuted ? <VolumeX size={30} /> : <Volume2 size={30} />}
+              </button>
+
               <div
                 data-testid="reel-paused-play"
-                className="w-16 h-16 rounded-full quad-reel-paused-btn flex items-center justify-center"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center quad-reel-overlay-icon"
               >
-                <Play size={28} fill="currentColor" className="ml-1" />
+                <Play size={58} fill="currentColor" className="ml-1" />
               </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Subtle Center Play Flash Feedback on resume */}
-        <AnimatePresence>
-          {hasRealVideo && !videoError && flashIcon === 'play' && (
-            <motion.div
-              key="flash-play"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: shouldReduceMotion ? 0 : 0.15 }}
-              className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
-            >
-              <div className="w-14 h-14 rounded-full quad-reel-paused-btn flex items-center justify-center">
-                <Play size={24} fill="currentColor" className="ml-1" />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Double-tap Floating Ink Heart */}
+        {/* Double-tap Floating Heart */}
         <AnimatePresence>
           {showHeartPop && !shouldReduceMotion && (
             <motion.div
@@ -586,7 +572,7 @@ export function ReelCard({
               transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
               className="absolute inset-0 flex items-center justify-center pointer-events-none z-30"
             >
-              <Heart size={24} className="text-ink fill-ink w-16 h-16" />
+              <Heart size={24} className="text-coral fill-coral w-16 h-16 quad-reel-overlay-icon" />
             </motion.div>
           )}
         </AnimatePresence>
@@ -595,7 +581,7 @@ export function ReelCard({
       {/* Subtle Bottom Gradient Behind Text Only */}
       <div
         aria-hidden="true"
-        className={`absolute inset-x-0 bottom-0 h-44 pointer-events-none z-10 quad-reel-bottom-scrim quad-reel-overlay-fade transition-opacity duration-150 ${
+        className={`absolute inset-x-0 bottom-0 h-44 pointer-events-none z-10 quad-reel-overlay-scrim-bottom quad-reel-overlay-fade transition-opacity duration-150 ${
           controlsVisible ? 'opacity-100' : 'opacity-0'
         }`}
       />
@@ -625,11 +611,11 @@ export function ReelCard({
               <button
                 type="button"
                 onClick={handleOpenAuthorProfile}
-                className="block max-w-full text-left text-sm font-semibold tracking-tight quad-reel-text-shadow truncate hover:underline cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                className="block max-w-full text-left text-sm font-semibold tracking-tight quad-reel-overlay-text truncate hover:underline cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 @{reel.username}
               </button>
-              <p className="text-xs quad-reel-subtext-shadow truncate">
+              <p className="text-xs quad-reel-overlay-text-muted truncate">
                 {reel.branch && reel.year
                   ? `${reel.branch} • ${reel.year} Year`
                   : 'Campus Member'}
@@ -638,7 +624,7 @@ export function ReelCard({
           </div>
 
           {(reel.caption || extraHashtags.length > 0) && (
-            <p className="text-xs quad-reel-text-shadow leading-relaxed line-clamp-3 break-words">
+            <p className="text-xs quad-reel-overlay-text leading-relaxed line-clamp-3 break-words">
               {reel.caption}
               {extraHashtags.length > 0 && (
                 <span className="ml-1 font-semibold">
@@ -648,13 +634,13 @@ export function ReelCard({
             </p>
           )}
 
-          <div className="inline-flex items-center gap-2 text-xs quad-reel-subtext-shadow max-w-full">
+          <div className="inline-flex items-center gap-2 text-xs quad-reel-overlay-text-muted max-w-full">
             <Music size={14} className="shrink-0" aria-hidden="true" />
             <span className="truncate">Original Audio</span>
           </div>
         </div>
 
-        {/* Right Action Rail (slightly inset): Mute, Like, Comment, Share, Save */}
+        {/* Right Action Rail (bare transparent white icons, zero circles/fills): Like, Comment, Share, Save */}
         <div
           className={`flex flex-col items-center gap-3 shrink-0 pr-1 ${
             controlsVisible ? 'pointer-events-auto' : 'pointer-events-none'
@@ -665,33 +651,17 @@ export function ReelCard({
             onClick={(e) => {
               e.stopPropagation();
               wakeControls();
-              onToggleMute();
-            }}
-            aria-pressed={!isMuted}
-            aria-label={isMuted ? 'Unmute reel audio' : 'Mute reel audio'}
-            className="min-h-[44px] min-w-[44px] w-11 h-11 rounded-full quad-reel-action-btn transition-all duration-150 cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
-          >
-            {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
-          </button>
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              wakeControls();
               onToggleLike(reel.id);
             }}
             aria-pressed={liked}
             aria-label={liked ? `Unlike reel, ${reel.likes + 1} likes` : `Like reel, ${reel.likes} likes`}
-            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
+            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] quad-reel-overlay-icon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
           >
-            <div
-              data-liked={liked ? 'true' : undefined}
-              className="w-11 h-11 rounded-full quad-reel-action-btn flex items-center justify-center transition-all duration-150"
-            >
-              <Heart size={20} className={liked ? 'fill-current' : ''} />
-            </div>
-            <span className="text-xs font-semibold quad-reel-text-shadow leading-none tabular-nums">
+            <Heart
+              size={26}
+              className={liked ? 'text-coral fill-coral' : ''}
+            />
+            <span className="text-xs font-semibold quad-reel-overlay-text leading-none tabular-nums">
               {liked ? reel.likes + 1 : reel.likes}
             </span>
           </button>
@@ -704,12 +674,10 @@ export function ReelCard({
               onOpenComments(reel);
             }}
             aria-label={`View ${reel.comments} comments`}
-            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
+            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] quad-reel-overlay-icon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
           >
-            <div className="w-11 h-11 rounded-full quad-reel-action-btn flex items-center justify-center transition-all duration-150">
-              <MessageSquare size={20} />
-            </div>
-            <span className="text-xs font-semibold quad-reel-text-shadow leading-none tabular-nums">
+            <MessageSquare size={26} />
+            <span className="text-xs font-semibold quad-reel-overlay-text leading-none tabular-nums">
               {reel.comments}
             </span>
           </button>
@@ -722,12 +690,10 @@ export function ReelCard({
               onShare(reel);
             }}
             aria-label={`Share reel, ${(reel.shares || 0) + shareCountOffset} shares`}
-            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
+            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] quad-reel-overlay-icon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
           >
-            <div className="w-11 h-11 rounded-full quad-reel-action-btn flex items-center justify-center transition-all duration-150">
-              <Share2 size={20} />
-            </div>
-            <span className="text-xs font-semibold quad-reel-text-shadow leading-none tabular-nums">
+            <Share2 size={26} />
+            <span className="text-xs font-semibold quad-reel-overlay-text leading-none tabular-nums">
               {(reel.shares || 0) + shareCountOffset}
             </span>
           </button>
@@ -741,14 +707,9 @@ export function ReelCard({
             }}
             aria-pressed={saved}
             aria-label={saved ? 'Remove saved reel' : 'Save reel'}
-            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
+            className="min-h-[44px] min-w-[44px] flex flex-col items-center justify-center gap-1 cursor-pointer rounded-[8px] quad-reel-overlay-icon focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent pointer-events-auto"
           >
-            <div
-              data-active={saved ? 'true' : undefined}
-              className="w-11 h-11 rounded-full quad-reel-action-btn flex items-center justify-center transition-all duration-150"
-            >
-              <Bookmark size={20} className={saved ? 'fill-current' : ''} />
-            </div>
+            <Bookmark size={26} className={saved ? 'fill-current' : ''} />
           </button>
         </div>
       </div>
@@ -757,7 +718,7 @@ export function ReelCard({
       {timeDisplay && (isPlayerHovered || isDraggingSeek) && (
         <div
           data-testid="reel-hover-time"
-          className="absolute right-3 bottom-3 z-30 pointer-events-none text-[11px] font-semibold quad-reel-text-shadow tabular-nums leading-none"
+          className="quad-reel-time-hover absolute right-3 z-30 pointer-events-none text-[11px] font-semibold quad-reel-overlay-text tabular-nums leading-none"
         >
           {timeDisplay}
         </div>
@@ -817,7 +778,7 @@ export function ReelCard({
             seekToTime(totalSec);
           }
         }}
-        className={`group absolute inset-x-0 bottom-0 h-6 flex items-end z-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        className={`quad-reel-seekbar-wrap group absolute inset-x-0 h-6 flex items-end z-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           hasRealVideo && totalSec > 0 ? 'cursor-pointer' : 'pointer-events-none'
         }`}
       >
