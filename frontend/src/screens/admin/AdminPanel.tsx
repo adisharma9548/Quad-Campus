@@ -766,6 +766,14 @@ export default function AdminPanel({
                           <span className="font-bold text-ink">Violation Reason: </span>
                           <span className="text-danger font-semibold">{rep.reason}</span>
                         </div>
+                        {rep.targetContext && (
+                          <div className="text-ink/80">
+                            <span className="font-semibold text-ink">Context: </span>
+                            {rep.targetContext.authorUsername ? `@${rep.targetContext.authorUsername}` : ''}
+                            {rep.targetContext.threadId ? ` • Thread ${rep.targetContext.threadId}` : ''}
+                            {rep.targetContext.commentId ? ` • Comment ${rep.targetContext.commentId}` : ''}
+                          </div>
+                        )}
                         {rep.details && (
                           <div className="text-ink/80">
                             <span className="font-semibold text-ink">Details: </span>

@@ -73,6 +73,7 @@ export interface SelfUser {
   interests: string[];
   profilePublic: boolean;
   discoverableByBranch: boolean;
+  directoryVisible?: boolean;
   readReceipts: boolean;
   activeStatus: boolean;
   createdAt: string;
@@ -87,11 +88,13 @@ export interface PeerUser {
   year: string | null;
   profilePublic: boolean;
   discoverable: boolean;
+  directoryVisible?: boolean;
 }
 
 export interface ViewerRelations {
   followingIds: Set<string>;
   outgoingRequestTargetIds: Set<string>;
+  incomingRequestRequesterIds?: Set<string>;
   viewerMembershipByAuthor: Map<string, string>;
   blockedIds: Set<string>;
   blockedByIds: Set<string>;
@@ -195,6 +198,16 @@ export interface ReelItem {
   posterKey: string;
   posterAlt: string;
   mediaUrl: string;
+  videoUrl: string;
+  coverUrl: string;
+  durationSec: number;
+  trimStart: number;
+  trimEnd: number;
+  fitMode: 'fit' | 'crop';
+  audience: 'campus' | 'followers';
+  commentsEnabled: boolean;
+  mentions: string[];
+  hashtags: string[];
   status: string;
   createdAtMs: number;
   score?: number;

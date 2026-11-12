@@ -60,7 +60,7 @@ interface JoinedAnswerRow {
   avatar_initials: string;
 }
 
-function loadAllPostsWithStats(db: DatabaseSync, viewerId: string | null): PostItem[] {
+export function loadAllPostsWithStats(db: DatabaseSync, viewerId: string | null): PostItem[] {
   const rows = db
     .prepare(`
       SELECT
@@ -174,7 +174,7 @@ function loadAllPostsWithStats(db: DatabaseSync, viewerId: string | null): PostI
   });
 }
 
-function serializePostForResponse(post: PostItem) {
+export function serializePostForResponse(post: PostItem) {
   const {
     authorId: _aid,
     authorStatus: _as,

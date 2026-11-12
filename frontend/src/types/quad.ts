@@ -86,6 +86,25 @@ export interface ReelItem {
   posterKey?: string;
   posterUrl?: string;
   posterAlt?: string;
+  mediaUrl?: string;
+  videoUrl?: string;
+  coverUrl?: string;
+  durationSec?: number;
+  trimStart?: number;
+  trimEnd?: number;
+  fitMode?: 'fit' | 'crop';
+  audience?: 'campus' | 'followers';
+  commentsEnabled?: boolean;
+  mentions?: string[];
+  hashtags?: string[];
+}
+
+export interface ReelCommentItem {
+  id: string;
+  username: string;
+  initials: string;
+  content: string;
+  timestamp: string;
 }
 
 export interface SignUpPayload {
@@ -116,10 +135,22 @@ export interface UsernameCheckResult {
 
 export interface ThreadReply {
   id: string | number;
+  threadId?: string | number;
+  parentCommentId?: string | number | null;
+  replyToUserId?: string | null;
+  replyToUsername?: string | null;
   username: string;
   initials: string;
   content: string;
+  body?: string;
   timestamp: string;
+  createdAt?: string;
+  likes?: number;
+  isDeleted?: boolean;
+  hasMoreReplies?: boolean;
+  hiddenReplyCount?: number;
+  reportedByMe?: boolean;
+  replies?: ThreadReply[];
 }
 
 export interface ThreadItem {
@@ -138,11 +169,24 @@ export interface PeerUser {
   id: string | number;
   username: string;
   initials: string;
-  branch: string;
-  year: string;
+  branch: string | null;
+  year: string | null;
   bio?: string;
+  interests?: string[];
+  profilePublic?: boolean;
+  discoverable?: boolean;
+  directoryVisible?: boolean;
   isFollowing?: boolean;
   isRequested?: boolean;
+}
+
+export interface PeerProfileData {
+  user: PeerUser & {
+    isSelf?: boolean;
+    isIncomingRequested?: boolean;
+  };
+  publicPosts: PostItem[];
+  personalPosts: PostItem[];
 }
 
 export interface FollowRequestItem {
@@ -212,6 +256,7 @@ export interface UserProfile {
   suspendedUntil?: number | null;
   profilePublic?: boolean;
   discoverableByBranch?: boolean;
+  directoryVisible?: boolean;
   readReceipts?: boolean;
   activeStatus?: boolean;
   createdAt?: number | string;
@@ -247,6 +292,11 @@ export interface AdminReport {
   reason: string;
   details?: string;
   contentSnippet?: string;
+  targetContext?: {
+    threadId?: string;
+    commentId?: string;
+    authorUsername?: string;
+  } | null;
   status: string;
   createdAt: number | string;
 }

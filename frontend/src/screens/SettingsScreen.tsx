@@ -76,7 +76,12 @@ export default function SettingsScreen({
   const handleDiscoveryToggle = async () => {
     const next = !showInDiscovery;
     await toggleDiscoverability(next);
-    showToast(next ? 'Enabled directory discovery for your branch' : 'Hidden from campus directory search', 'info');
+    showToast(
+      next
+        ? 'You are now visible in Directory and Who to follow'
+        : "People won't find you in Directory or Who to follow. You can still browse others.",
+      'info'
+    );
   };
 
   const handleDownloadData = async () => {
@@ -121,7 +126,7 @@ export default function SettingsScreen({
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto py-6 px-4 space-y-6">
+    <div className="w-full space-y-6">
       <div className="flex items-center justify-between pb-3 border-b border-ink/12 gap-3">
         <div>
           <h2 className="text-xl font-bold text-ink font-display">
@@ -165,10 +170,15 @@ export default function SettingsScreen({
           <Toggle
             active={showInDiscovery}
             onToggle={handleDiscoveryToggle}
-            label="Let others in my branch find me"
-            description="Allow classmates in your branch to search for your pseudonym in Directory."
+            label="Let others find me in Directory & Who to follow"
+            description="People won't find you in Directory or Who to follow. You can still browse others."
             icon={Eye}
           />
+          {!showInDiscovery && (
+            <div className="py-3 px-1 text-xs text-ink/60 leading-relaxed">
+              Directory is OFF for your account: people won&apos;t find you in Directory or Who to follow. You can still browse others.
+            </div>
+          )}
         </Card>
       </div>
 

@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useAuth } from './AuthContext';
-import { IS_REAL_BACKEND, apiRequest } from '../services/apiClient';
+import { API_BASE_URL, ApiError, IS_REAL_BACKEND, apiRequest, getAuthToken } from '../services/apiClient';
+import {
+  insertReplyIntoTree,
+  mergeBranchChildren,
+  removeReplyFromTree,
+  replaceTempReplyInTree,
+  setReplyReportedInTree,
+} from '../utils/threadTree';
 import type {
   BlockedUserItem,
   FollowRequestItem,
@@ -85,7 +92,9 @@ export interface AppState {
   personalPosts: AppPersonalPost[];
   reels: AppReelItem[];
   threadPosts: Array<ThreadItem & { replies?: AppThreadReply[] }>;
+  threadsHasMore?: boolean;
   discoverableUsers: PeerUser[];
+  whoToFollow: PeerUser[];
   [key: string]: unknown;
 }
 
@@ -141,6 +150,7 @@ export interface AppContextValue {
   hydrateFromBackend: () => Promise<void>;
   refreshFeed: (params?: RefreshFeedParams) => Promise<void>;
   refreshDirectory: (params?: RefreshDirectoryParams) => Promise<void>;
+  refreshWhoToFollow: (limit?: number) => Promise<void>;
   refreshSocialOverview: () => Promise<void>;
   uploadMediaImage: (fileOrDataUrl: File | string) => Promise<UploadMediaResult>;
   createPost: (payload: CreatePostPayload) => Promise<PostItem>;
@@ -152,6 +162,14 @@ export interface AppContextValue {
   blockAuthor: (username: string, reason?: string) => Promise<void>;
   unblockAuthor: (usernameOrId: string | number) => Promise<void>;
   submitReport: (payload: ReportPayload) => Promise<{ status: string; [key: string]: unknown }>;
+  createReel: (
+    formData: FormData,
+    options?: {
+      onProgress?: (percent: number) => void;
+      signal?: AbortSignal;
+    }
+  ) => Promise<AppReelItem>;
+  searchMentionUsers: (query: string) => Promise<PeerUser[]>;
   markReelsSeen: () => Promise<void>;
   toggleReelLike: (reelId: string | number) => Promise<{ likes: number; liked: boolean } | null>;
   markBestAnswer: (postId: string | number, answerId: string) => Promise<void>;
@@ -175,7 +193,21 @@ export interface AppContextValue {
   unfollowUser: (username: string) => Promise<void>;
   createThread: (content: string) => Promise<ThreadItem>;
   toggleThreadLike: (threadId: string | number) => Promise<{ likes: number; liked: boolean } | null>;
-  addThreadReply: (threadId: string | number, content: string) => Promise<AppThreadReply>;
+  addThreadReply: (
+    threadId: string | number,
+    content: string,
+    options?: { parentCommentId?: string | number | null; replyToUsername?: string | null }
+  ) => Promise<AppThreadReply>;
+  loadMoreThreadReplies: (threadId: string | number, parentCommentId: string | number) => Promise<void>;
+  loadMoreThreads: () => Promise<void>;
+  deleteThreadReply: (threadId: string | number, replyId: string | number) => Promise<void>;
+  reportThreadComment: (
+    threadId: string | number,
+    comment: AppThreadReply,
+    reason: string,
+    details?: string
+  ) => Promise<'reported' | 'already_reported'>;
+  undoThreadCommentReport: (threadId: string | number, replyId: string | number) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -219,7 +251,9 @@ function buildEmptyState(): AppState {
     personalPosts: [],
     reels: [],
     threadPosts: [],
+    threadsHasMore: false,
     discoverableUsers: [],
+    whoToFollow: [],
   };
 }
 
@@ -365,17 +399,52 @@ const mockInitialState: AppState = {
       replies: [
         {
           id: 4011,
+          threadId: 401,
+          parentCommentId: null,
           username: 'binary_bard',
           initials: 'BB',
           content: 'Hand-rolling gives you much better custom compiler error spans for diagnostics. The visitor pattern gets verbose very quickly in C++.',
           timestamp: '20m ago',
           likes: 8,
+          replies: [
+            {
+              id: 4012,
+              threadId: 401,
+              parentCommentId: 4011,
+              replyToUsername: 'binary_bard',
+              username: 'compiler_fan',
+              initials: 'CF',
+              content: 'Good call! Pratt parsing for expressions + recursive descent for statements felt super clean.',
+              timestamp: '12m ago',
+              likes: 4,
+              replies: [],
+            },
+          ],
         },
       ],
     },
   ],
   discoverableUsers: [
-    { id: 1, username: 'tech_titan', initials: 'TT', branch: 'CSE', year: '3rd', bio: 'Backend infrastructure & systems' },
+    {
+      id: 1,
+      username: 'tech_titan',
+      initials: 'TT',
+      branch: 'CSE',
+      year: '3rd',
+      bio: 'Backend infrastructure & systems',
+      directoryVisible: true,
+    },
+  ],
+  whoToFollow: [
+    {
+      id: 1,
+      username: 'tech_titan',
+      initials: 'TT',
+      branch: 'CSE',
+      year: '3rd',
+      bio: 'Backend infrastructure & systems',
+      directoryVisible: true,
+    },
   ],
 };
 
@@ -419,13 +488,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
 
     try {
-      const [feedRes, personalRes, reelsRes, threadsRes, directoryRes, socialRes, eventsRes] =
+      const [feedRes, personalRes, reelsRes, threadsRes, directoryRes, whoRes, socialRes, eventsRes] =
         await Promise.all([
           apiRequest<{ items?: PostItem[]; trendingTopics?: TrendingTopic[] }>('/feed?limit=40'),
           apiRequest<{ items?: AppPersonalPost[] }>('/feed/personal'),
           apiRequest<{ items?: AppReelItem[] }>('/reels'),
-          apiRequest<{ items?: ThreadItem[] }>('/threads'),
+          apiRequest<{ items?: ThreadItem[]; hasMore?: boolean }>('/threads?limit=15&offset=0'),
           apiRequest<{ items?: PeerUser[] }>('/directory?limit=40'),
+          apiRequest<{ items?: PeerUser[] }>('/who-to-follow?limit=3').catch(() => ({ items: [] })),
           apiRequest<SocialOverviewResponse>('/social/overview'),
           apiRequest<{ items?: ThisWeekEvent[] }>('/events/this-week'),
         ]);
@@ -438,7 +508,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         personalPosts: personalRes?.items || [],
         reels: reelsRes?.items || [],
         threadPosts: threadsRes?.items || [],
+        threadsHasMore: Boolean(threadsRes?.hasMore),
         discoverableUsers: directoryRes?.items || [],
+        whoToFollow: whoRes?.items || [],
         thisWeekEvents: eventsRes?.items || [],
         followers: socialRes?.followers || [],
         followersCount: socialRes?.followersCount ?? 0,
@@ -511,6 +583,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (params.year) qs.set('year', params.year);
     const res = await apiRequest<{ items?: PeerUser[] }>(`/directory?${qs.toString()}`);
     setState((prev) => ({ ...prev, discoverableUsers: res?.items || [] }));
+  }, []);
+
+  const refreshWhoToFollow = useCallback(async (limit = 3) => {
+    if (!IS_REAL_BACKEND) return;
+    const res = await apiRequest<{ items?: PeerUser[] }>(`/who-to-follow?limit=${limit}`);
+    setState((prev) => ({ ...prev, whoToFollow: res?.items || [] }));
   }, []);
 
   const uploadMediaImage = useCallback(async (fileOrDataUrl: File | string): Promise<UploadMediaResult> => {
@@ -674,12 +752,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ...prev,
       publicPosts: (prev.publicPosts || []).filter((p) => p.username !== username),
       discoverableUsers: (prev.discoverableUsers || []).filter((u) => u.username !== username),
+      whoToFollow: (prev.whoToFollow || []).filter((u) => u.username !== username),
     }));
     if (IS_REAL_BACKEND) {
       await apiRequest('/blocks', { method: 'POST', body: { username, reason } });
-      await Promise.all([refreshSocialOverview(), refreshFeed()]);
+      await Promise.all([
+        refreshSocialOverview(),
+        refreshFeed(),
+        refreshDirectory(),
+        refreshWhoToFollow(),
+      ]);
     }
-  }, [refreshFeed, refreshSocialOverview]);
+  }, [refreshDirectory, refreshFeed, refreshSocialOverview, refreshWhoToFollow]);
 
   const unblockAuthor = useCallback(async (usernameOrId: string | number) => {
     if (!IS_REAL_BACKEND) {
@@ -696,8 +780,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
     const uname = target?.username || String(usernameOrId);
     await apiRequest(`/blocks/${encodeURIComponent(uname)}`, { method: 'DELETE' });
-    await Promise.all([refreshSocialOverview(), refreshFeed(), refreshDirectory()]);
-  }, [refreshDirectory, refreshFeed, refreshSocialOverview, state.blockedUsers]);
+    await Promise.all([
+      refreshSocialOverview(),
+      refreshFeed(),
+      refreshDirectory(),
+      refreshWhoToFollow(),
+    ]);
+  }, [refreshDirectory, refreshFeed, refreshSocialOverview, refreshWhoToFollow, state.blockedUsers]);
 
   const submitReport = useCallback(
     async ({ targetType, targetId, reason, details, contentSnippet }: ReportPayload) => {
@@ -708,6 +797,129 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     },
     []
+  );
+
+  const createReel = useCallback(
+    async (
+      formData: FormData,
+      options?: { onProgress?: (percent: number) => void; signal?: AbortSignal }
+    ): Promise<AppReelItem> => {
+      if (!IS_REAL_BACKEND) {
+        const caption = String(formData.get('caption') || '');
+        const mockReel: AppReelItem = {
+          id: Date.now(),
+          username: state.username || 'quantum_dev',
+          initials: state.userInitials || 'QD',
+          branch: state.branch || 'CSE',
+          year: (state.year || '3rd').replace(/\s*Year$/i, ''),
+          caption,
+          tag: 'Campus Reel',
+          duration: '0:15',
+          durationSec: Number(formData.get('durationSec') || 15),
+          trimStart: Number(formData.get('trimStart') || 0),
+          trimEnd: Number(formData.get('trimEnd') || 15),
+          fitMode: formData.get('fitMode') === 'fit' ? 'fit' : 'crop',
+          audience: formData.get('audience') === 'followers' ? 'followers' : 'campus',
+          commentsEnabled: formData.get('commentsEnabled') !== 'false',
+          views: '1',
+          likes: 0,
+          comments: 0,
+          shares: 0,
+          unseen: false,
+          posterKey: 'robotics',
+        };
+        options?.onProgress?.(100);
+        setState((prev) => ({ ...prev, reels: [mockReel, ...(prev.reels || [])] }));
+        return mockReel;
+      }
+
+      const created = await new Promise<AppReelItem>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_BASE_URL}/reels`);
+        xhr.withCredentials = true;
+        const token = getAuthToken();
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+
+        const handleAbortSignal = () => {
+          xhr.abort();
+        };
+        if (options?.signal) {
+          if (options.signal.aborted) {
+            xhr.abort();
+            reject(new ApiError('Upload cancelled', 'UPLOAD_CANCELLED', 0));
+            return;
+          }
+          options.signal.addEventListener('abort', handleAbortSignal, { once: true });
+        }
+
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable && ev.total > 0) {
+            const pct = Math.min(99, Math.round((ev.loaded / ev.total) * 100));
+            options?.onProgress?.(pct);
+          }
+        };
+
+        xhr.onabort = () => {
+          options?.signal?.removeEventListener('abort', handleAbortSignal);
+          reject(new ApiError('Upload cancelled', 'UPLOAD_CANCELLED', 0));
+        };
+
+        xhr.onerror = () => {
+          options?.signal?.removeEventListener('abort', handleAbortSignal);
+          reject(new ApiError('Network error while uploading reel.', 'NETWORK_ERROR', 0));
+        };
+
+        xhr.onload = () => {
+          options?.signal?.removeEventListener('abort', handleAbortSignal);
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>;
+          } catch {
+            payload = {};
+          }
+          if (xhr.status >= 200 && xhr.status < 300) {
+            options?.onProgress?.(100);
+            resolve(payload as unknown as AppReelItem);
+          } else {
+            const errObj = (payload.error || {}) as { message?: string; code?: string };
+            reject(
+              new ApiError(
+                errObj.message || 'Reel upload failed.',
+                errObj.code || 'UPLOAD_FAILED',
+                xhr.status
+              )
+            );
+          }
+        };
+
+        xhr.send(formData);
+      });
+
+      setState((prev) => ({
+        ...prev,
+        reels: [created, ...(prev.reels || []).filter((r) => String(r.id) !== String(created.id))],
+      }));
+      return created;
+    },
+    [state.branch, state.userInitials, state.username, state.year]
+  );
+
+  const searchMentionUsers = useCallback(
+    async (query: string): Promise<PeerUser[]> => {
+      const q = query.trim().toLowerCase();
+      if (!IS_REAL_BACKEND) {
+        return (state.discoverableUsers || [])
+          .filter((u) => !q || u.username.toLowerCase().includes(q))
+          .slice(0, 6);
+      }
+      const res = await apiRequest<{ items?: PeerUser[] }>(
+        `/users/search?q=${encodeURIComponent(q)}&limit=6`
+      );
+      return res?.items || [];
+    },
+    [state.discoverableUsers]
   );
 
   const markReelsSeen = useCallback(async () => {
@@ -875,39 +1087,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toggleDiscoverability = useCallback(async (enabled: boolean) => {
     setState((prev) => ({ ...prev, discoverableByBranch: Boolean(enabled) }));
     if (IS_REAL_BACKEND && user) {
-      await updateProfile({ discoverableByBranch: Boolean(enabled) });
-      refreshDirectory();
+      await updateProfile({
+        discoverableByBranch: Boolean(enabled),
+        directoryVisible: Boolean(enabled),
+      });
+      await Promise.all([refreshDirectory(), refreshWhoToFollow()]);
     }
-  }, [refreshDirectory, updateProfile, user]);
+  }, [refreshDirectory, refreshWhoToFollow, updateProfile, user]);
 
   const updatePrivacySetting = useCallback(async (patch: Partial<AppState> & Partial<UserProfile>) => {
     setState((prev) => ({ ...prev, ...patch }));
     if (IS_REAL_BACKEND && user) {
       await updateProfile(patch);
+      if (patch.discoverableByBranch !== undefined || patch.directoryVisible !== undefined) {
+        await Promise.all([refreshDirectory(), refreshWhoToFollow()]);
+      }
     }
-  }, [updateProfile, user]);
+  }, [refreshDirectory, refreshWhoToFollow, updateProfile, user]);
 
   const requestFollow = useCallback(async (username: string) => {
-    if (!IS_REAL_BACKEND) return { status: 'requested' };
+    if (!IS_REAL_BACKEND) {
+      setState((prev) => ({
+        ...prev,
+        discoverableUsers: (prev.discoverableUsers || []).filter((u) => u.username !== username),
+        whoToFollow: (prev.whoToFollow || []).filter((u) => u.username !== username),
+      }));
+      return { status: 'requested' };
+    }
     const res = await apiRequest<{ status: string; [key: string]: unknown }>('/follow-requests', {
       method: 'POST',
       body: { targetUsername: username },
     });
     setState((prev) => ({
       ...prev,
-      discoverableUsers: (prev.discoverableUsers || []).map((u) =>
-        u.username === username
-          ? {
-              ...u,
-              isRequested: res.status === 'requested',
-              isFollowing: res.status === 'following',
-            }
-          : u
-      ),
+      discoverableUsers: (prev.discoverableUsers || []).filter((u) => u.username !== username),
+      whoToFollow: (prev.whoToFollow || []).filter((u) => u.username !== username),
     }));
-    if (res.status === 'following') refreshSocialOverview();
+    await Promise.all([
+      res.status === 'following' ? refreshSocialOverview() : Promise.resolve(),
+      refreshDirectory(),
+      refreshWhoToFollow(),
+    ]);
     return res;
-  }, [refreshSocialOverview]);
+  }, [refreshDirectory, refreshSocialOverview, refreshWhoToFollow]);
 
   const respondFollowRequest = useCallback(
     async (
@@ -944,9 +1166,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         method: 'POST',
         body: { action, groupName },
       });
-      await refreshSocialOverview();
+      await Promise.all([refreshSocialOverview(), refreshDirectory(), refreshWhoToFollow()]);
     },
-    [refreshSocialOverview]
+    [refreshDirectory, refreshSocialOverview, refreshWhoToFollow]
   );
 
   const removeFollower = useCallback(async (username: string) => {
@@ -968,8 +1190,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
     if (IS_REAL_BACKEND) {
       await apiRequest(`/following/${encodeURIComponent(username)}`, { method: 'DELETE' });
+      await Promise.all([refreshDirectory(), refreshWhoToFollow()]);
     }
-  }, []);
+  }, [refreshDirectory, refreshWhoToFollow]);
 
   const createThread = useCallback(async (content: string): Promise<ThreadItem> => {
     if (!IS_REAL_BACKEND) {
@@ -1006,43 +1229,274 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return res;
   }, []);
 
-  const addThreadReply = useCallback(async (threadId: string | number, content: string): Promise<AppThreadReply> => {
-    if (!IS_REAL_BACKEND) {
-      const reply: AppThreadReply = {
-        id: Date.now(),
-        username: state.username || 'quantum_dev',
-        initials: state.userInitials || 'QD',
+  const addThreadReply = useCallback(
+    async (
+      threadId: string | number,
+      content: string,
+      options?: { parentCommentId?: string | number | null; replyToUsername?: string | null }
+    ): Promise<AppThreadReply> => {
+      const parentCommentId = options?.parentCommentId ?? null;
+      const replyToUsername = options?.replyToUsername ?? null;
+
+      if (!IS_REAL_BACKEND) {
+        const reply: AppThreadReply = {
+          id: Date.now(),
+          threadId,
+          parentCommentId,
+          replyToUsername,
+          username: state.username || 'quantum_dev',
+          initials: state.userInitials || 'QD',
+          content,
+          body: content,
+          timestamp: 'Just now',
+          likes: 0,
+          replies: [],
+        };
+        setState((prev) => ({
+          ...prev,
+          threadPosts: (prev.threadPosts || []).map((t) =>
+            t.id === threadId
+              ? {
+                  ...t,
+                  replyCount: (t.replyCount || 0) + 1,
+                  replies: insertReplyIntoTree(t.replies || [], parentCommentId, reply),
+                }
+              : t
+          ),
+        }));
+        return reply;
+      }
+
+      const tempId = `temp_reply_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const optimisticReply: AppThreadReply = {
+        id: tempId,
+        threadId,
+        parentCommentId,
+        replyToUsername,
+        username: state.username || 'student',
+        initials: state.userInitials || 'ST',
         content,
-        timestamp: 'Just now',
+        body: content,
+        timestamp: 'Sending...',
         likes: 0,
+        replies: [],
       };
+
       setState((prev) => ({
         ...prev,
         threadPosts: (prev.threadPosts || []).map((t) =>
           t.id === threadId
-            ? { ...t, replyCount: (t.replyCount || 0) + 1, replies: [...(t.replies || []), reply] }
+            ? {
+                ...t,
+                replyCount: (t.replyCount || 0) + 1,
+                replies: insertReplyIntoTree(t.replies || [], parentCommentId, optimisticReply),
+              }
             : t
         ),
       }));
-      return reply;
-    }
-    const created = await apiRequest<AppThreadReply>(
-      `/threads/${encodeURIComponent(threadId)}/replies`,
-      {
-        method: 'POST',
-        body: { content },
+
+      try {
+        const created = await apiRequest<AppThreadReply>(
+          `/threads/${encodeURIComponent(threadId)}/replies`,
+          {
+            method: 'POST',
+            body: { content, body: content, parentCommentId },
+          }
+        );
+        setState((prev) => ({
+          ...prev,
+          threadPosts: (prev.threadPosts || []).map((t) =>
+            t.id === threadId
+              ? {
+                  ...t,
+                  replies: replaceTempReplyInTree(t.replies || [], tempId, created),
+                }
+              : t
+          ),
+        }));
+        return created;
+      } catch (err) {
+        // Rollback optimistic reply on failure
+        setState((prev) => ({
+          ...prev,
+          threadPosts: (prev.threadPosts || []).map((t) =>
+            t.id === threadId
+              ? {
+                  ...t,
+                  replyCount: Math.max(0, (t.replyCount || 1) - 1),
+                  replies: removeReplyFromTree(t.replies || [], tempId).nodes,
+                }
+              : t
+          ),
+        }));
+        throw err;
       }
+    },
+    [state.userInitials, state.username]
+  );
+
+  const loadMoreThreadReplies = useCallback(
+    async (threadId: string | number, parentCommentId: string | number): Promise<void> => {
+      if (!IS_REAL_BACKEND) return;
+      const res = await apiRequest<{ items?: AppThreadReply[] }>(
+        `/threads/${encodeURIComponent(threadId)}/replies?parentId=${encodeURIComponent(parentCommentId)}&maxDepth=3`
+      );
+      setState((prev) => ({
+        ...prev,
+        threadPosts: (prev.threadPosts || []).map((t) =>
+          t.id === threadId
+            ? {
+                ...t,
+                replies: mergeBranchChildren(t.replies || [], parentCommentId, res?.items || []),
+              }
+            : t
+        ),
+      }));
+    },
+    []
+  );
+
+  const loadMoreThreads = useCallback(async (): Promise<void> => {
+    if (!IS_REAL_BACKEND) return;
+    const offset = state.threadPosts?.length || 0;
+    const res = await apiRequest<{ items?: ThreadItem[]; hasMore?: boolean }>(
+      `/threads?limit=15&offset=${offset}`
     );
-    setState((prev) => ({
-      ...prev,
-      threadPosts: (prev.threadPosts || []).map((t) =>
-        t.id === threadId
-          ? { ...t, replyCount: (t.replyCount || 0) + 1, replies: [...(t.replies || []), created] }
-          : t
-      ),
-    }));
-    return created;
-  }, [state.userInitials, state.username]);
+    setState((prev) => {
+      const existingIds = new Set((prev.threadPosts || []).map((t) => String(t.id)));
+      const incoming = (res?.items || []).filter((t) => !existingIds.has(String(t.id)));
+      return {
+        ...prev,
+        threadPosts: [...(prev.threadPosts || []), ...incoming],
+        threadsHasMore: Boolean(res?.hasMore),
+      };
+    });
+  }, [state.threadPosts]);
+
+  const deleteThreadReply = useCallback(
+    async (threadId: string | number, replyId: string | number): Promise<void> => {
+      const previousThreads = state.threadPosts;
+      setState((prev) => ({
+        ...prev,
+        threadPosts: (prev.threadPosts || []).map((t) => {
+          if (t.id !== threadId) return t;
+          const res = removeReplyFromTree(t.replies || [], replyId);
+          return {
+            ...t,
+            replyCount:
+              res.changed && !res.softDeleted
+                ? Math.max(0, (t.replyCount || 1) - 1)
+                : t.replyCount,
+            replies: res.nodes,
+          };
+        }),
+      }));
+
+      if (!IS_REAL_BACKEND) return;
+
+      try {
+        await apiRequest(
+          `/threads/${encodeURIComponent(threadId)}/replies/${encodeURIComponent(replyId)}`,
+          { method: 'DELETE' }
+        );
+      } catch (err) {
+        setState((prev) => ({ ...prev, threadPosts: previousThreads }));
+        throw err;
+      }
+    },
+    [state.threadPosts]
+  );
+
+  const reportThreadComment = useCallback(
+    async (
+      threadId: string | number,
+      comment: AppThreadReply,
+      reason: string,
+      details?: string
+    ): Promise<'reported' | 'already_reported'> => {
+      if (comment.reportedByMe) {
+        return 'already_reported';
+      }
+
+      if (!IS_REAL_BACKEND) {
+        setState((prev) => ({
+          ...prev,
+          threadPosts: (prev.threadPosts || []).map((t) =>
+            t.id === threadId
+              ? { ...t, replies: setReplyReportedInTree(t.replies || [], comment.id, true) }
+              : t
+          ),
+        }));
+        return 'reported';
+      }
+
+      try {
+        await submitReport({
+          targetType: 'thread_comment',
+          targetId: String(comment.id),
+          reason,
+          details,
+          contentSnippet: (comment.content || '').slice(0, 180),
+        });
+        setState((prev) => ({
+          ...prev,
+          threadPosts: (prev.threadPosts || []).map((t) =>
+            t.id === threadId
+              ? { ...t, replies: setReplyReportedInTree(t.replies || [], comment.id, true) }
+              : t
+          ),
+        }));
+        return 'reported';
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.toLowerCase().includes('already reported')) {
+          setState((prev) => ({
+            ...prev,
+            threadPosts: (prev.threadPosts || []).map((t) =>
+              t.id === threadId
+                ? { ...t, replies: setReplyReportedInTree(t.replies || [], comment.id, true) }
+                : t
+            ),
+          }));
+          return 'already_reported';
+        }
+        throw err;
+      }
+    },
+    [submitReport]
+  );
+
+  const undoThreadCommentReport = useCallback(
+    async (threadId: string | number, replyId: string | number): Promise<void> => {
+      setState((prev) => ({
+        ...prev,
+        threadPosts: (prev.threadPosts || []).map((t) =>
+          t.id === threadId
+            ? { ...t, replies: setReplyReportedInTree(t.replies || [], replyId, false) }
+            : t
+        ),
+      }));
+
+      if (!IS_REAL_BACKEND) return;
+
+      try {
+        await apiRequest(`/reports/target/thread_comment/${encodeURIComponent(replyId)}`, {
+          method: 'DELETE',
+        });
+      } catch (err) {
+        setState((prev) => ({
+          ...prev,
+          threadPosts: (prev.threadPosts || []).map((t) =>
+            t.id === threadId
+              ? { ...t, replies: setReplyReportedInTree(t.replies || [], replyId, true) }
+              : t
+          ),
+        }));
+        throw err;
+      }
+    },
+    []
+  );
 
   return (
     <AppContext.Provider
@@ -1052,6 +1506,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         hydrateFromBackend,
         refreshFeed,
         refreshDirectory,
+        refreshWhoToFollow,
         refreshSocialOverview,
         uploadMediaImage,
         createPost,
@@ -1063,6 +1518,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         blockAuthor,
         unblockAuthor,
         submitReport,
+        createReel,
+        searchMentionUsers,
         markReelsSeen,
         toggleReelLike,
         markBestAnswer,
@@ -1080,6 +1537,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createThread,
         toggleThreadLike,
         addThreadReply,
+        loadMoreThreadReplies,
+        loadMoreThreads,
+        deleteThreadReply,
+        reportThreadComment,
+        undoThreadCommentReport,
       }}
     >
       {children}

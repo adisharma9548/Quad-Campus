@@ -34,6 +34,7 @@ import {
 import { PostCard, PostCardSkeleton } from '../components/PostCard';
 import { ReelStrip } from '../components/ReelStrip';
 import { ThisWeekCard } from '../components/ThisWeekCard';
+import ReportModal from '../components/ReportModal';
 
 const PRIVACY_BANNER_STORAGE_KEY = 'quad_feed_privacy_banner_dismissed';
 
@@ -344,17 +345,25 @@ export default function PublicFeedScreen({
     }, 1000);
   };
 
-  const handleExecuteReport = async () => {
+  const handleExecuteReport = async (reason: string, details: string) => {
     if (!confirmReportPost) return;
-    await submitReport({
-      targetType: 'post',
-      targetId: String(confirmReportPost.id),
-      reason: 'Community Guidelines Review',
-      contentSnippet: (confirmReportPost.content || '').slice(0, 180),
-    });
-    setConfirmReportPost(null);
-    setSheetPost(null);
-    showToast('Confidential report submitted to campus moderation', 'info');
+    try {
+      await submitReport({
+        targetType: 'post',
+        targetId: String(confirmReportPost.id),
+        reason,
+        details,
+        contentSnippet: (confirmReportPost.content || '').slice(0, 180),
+      });
+      setConfirmReportPost(null);
+      setSheetPost(null);
+      showToast('Confidential report submitted to campus moderation', 'info');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to submit report';
+      setConfirmReportPost(null);
+      setSheetPost(null);
+      showToast(msg, 'info');
+    }
   };
 
   const handleCommentSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -381,7 +390,7 @@ export default function PublicFeedScreen({
   };
 
   return (
-    <div className="w-full max-w-[640px] mx-auto py-2 px-1 sm:px-0 space-y-4">
+    <div className="w-full space-y-4">
       {/* Offline banner when device connection drops */}
       {!isOnline && (
         <div
@@ -409,8 +418,8 @@ export default function PublicFeedScreen({
         </div>
       )}
 
-      {/* Compact "This week" summary above feed for 1024-1279px only (Right rail hidden) */}
-      <div className="hidden lg:block xl:hidden">
+      {/* Compact "This week" summary above feed when right rail is hidden (1024-1099px) */}
+      <div className="quad-compact-week">
         <ThisWeekCard
           compact
           items={thisWeekEvents}
@@ -617,21 +626,13 @@ export default function PublicFeedScreen({
           setConfirmReportPost(null);
           setActionDone(null);
         }}
-        title={
-          confirmBlockPost
-            ? `Block @${confirmBlockPost.username}?`
-            : confirmReportPost
-              ? 'Submit confidential report?'
-              : 'Post options'
-        }
+        title={confirmBlockPost ? `Block @${confirmBlockPost.username}?` : 'Post options'}
         description={
           confirmBlockPost
             ? 'Blocked accounts cannot view your profile, find you in search, or interact with you.'
-            : confirmReportPost
-              ? 'Your report is private. No alert is sent to the author.'
-              : sheetPost
-                ? `Actions for @${sheetPost.username}'s post`
-                : ''
+            : sheetPost
+              ? `Actions for @${sheetPost.username}'s post`
+              : ''
         }
         size="md"
       >
@@ -662,26 +663,6 @@ export default function PublicFeedScreen({
                 onClick={handleExecuteBlock}
               >
                 Confirm Block
-              </Button>
-            </div>
-          </div>
-        ) : confirmReportPost ? (
-          <div className="space-y-4 pt-2">
-            <div className="flex items-center justify-end gap-3">
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={() => setConfirmReportPost(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                size="md"
-                icon={Flag}
-                onClick={handleExecuteReport}
-              >
-                Confirm Report
               </Button>
             </div>
           </div>
@@ -748,7 +729,11 @@ export default function PublicFeedScreen({
                     icon={Flag}
                     label="Report"
                     description="Report harassment, impersonation, or safety concerns"
-                    onClick={() => setConfirmReportPost(sheetPost)}
+                    onClick={() => {
+                      const target = sheetPost;
+                      setSheetPost(null);
+                      setConfirmReportPost(target);
+                    }}
                     danger
                   />
                 </>
@@ -768,6 +753,16 @@ export default function PublicFeedScreen({
           </div>
         )}
       </Modal>
+
+      <ReportModal
+        isOpen={Boolean(confirmReportPost)}
+        targetLabel={
+          confirmReportPost ? `Post by @${confirmReportPost.username}` : undefined
+        }
+        snippet={confirmReportPost?.content}
+        onClose={() => setConfirmReportPost(null)}
+        onConfirm={handleExecuteReport}
+      />
 
       {/* Edit own post */}
       <Modal

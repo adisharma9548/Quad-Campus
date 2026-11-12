@@ -54,6 +54,7 @@ export function toSelfUser(row: UserRow | null | undefined): SelfUser | null {
     interests,
     profilePublic: Boolean(row.profile_public),
     discoverableByBranch: Boolean(row.discoverable),
+    directoryVisible: Boolean(row.discoverable),
     readReceipts: Boolean(row.read_receipts),
     activeStatus: Boolean(row.active_status),
     createdAt: row.created_at,
@@ -77,6 +78,7 @@ export function toPeerUser(row: UserRow | null | undefined): PeerUser | null {
     year: canShowAcademics ? row.year : null,
     profilePublic: Boolean(row.profile_public),
     discoverable: canShowAcademics,
+    directoryVisible: canShowAcademics,
   };
 }
 
@@ -86,6 +88,7 @@ export function toPeerUser(row: UserRow | null | undefined): PeerUser | null {
 export function getViewerRelations(db: DatabaseSync, viewerId: string | null): ViewerRelations {
   const followingIds = new Set<string>();
   const outgoingRequestTargetIds = new Set<string>();
+  const incomingRequestRequesterIds = new Set<string>();
   const viewerMembershipByAuthor = new Map<string, string>();
   const blockedIds = new Set<string>();
   const blockedByIds = new Set<string>();
@@ -97,6 +100,7 @@ export function getViewerRelations(db: DatabaseSync, viewerId: string | null): V
     return {
       followingIds,
       outgoingRequestTargetIds,
+      incomingRequestRequesterIds,
       viewerMembershipByAuthor,
       blockedIds,
       blockedByIds,
@@ -116,6 +120,11 @@ export function getViewerRelations(db: DatabaseSync, viewerId: string | null): V
     .prepare("SELECT target_id FROM follow_requests WHERE requester_id = ? AND status = 'pending'")
     .all(viewerId) as Array<{ target_id: string }>) {
     outgoingRequestTargetIds.add(r.target_id);
+  }
+  for (const r of db
+    .prepare("SELECT requester_id FROM follow_requests WHERE target_id = ? AND status = 'pending'")
+    .all(viewerId) as Array<{ requester_id: string }>) {
+    incomingRequestRequesterIds.add(r.requester_id);
   }
   for (const r of db
     .prepare('SELECT blocked_id FROM blocks WHERE blocker_id = ?')
@@ -154,6 +163,7 @@ export function getViewerRelations(db: DatabaseSync, viewerId: string | null): V
   return {
     followingIds,
     outgoingRequestTargetIds,
+    incomingRequestRequesterIds,
     viewerMembershipByAuthor,
     blockedIds,
     blockedByIds,

@@ -201,16 +201,29 @@ export function registerAdminRoutes(
   );
 
   app.get('/api/v1/admin/reports', { preHandler: auth.requireAdmin }, async () => {
-    return db
+    const rows = db
       .prepare(`
         SELECT r.id, u.username AS reporterHandle, r.target_type AS targetType, r.target_id AS targetId,
-               r.reason, r.details, r.content_snippet AS contentSnippet, r.status, r.action_taken AS actionTaken,
+               r.reason, r.details, r.content_snippet AS contentSnippet, r.target_context AS targetContextRaw,
+               r.status, r.action_taken AS actionTaken,
                r.resolved_at AS resolvedAt, r.created_at AS createdAt
         FROM reports r
         JOIN users u ON u.id = r.reporter_id
         ORDER BY CASE WHEN r.status = 'pending' THEN 0 ELSE 1 END, r.created_at DESC
       `)
-      .all();
+      .all() as Array<Record<string, unknown>>;
+
+    return rows.map(({ targetContextRaw, ...rest }) => {
+      let targetContext: Record<string, unknown> | null = null;
+      if (typeof targetContextRaw === 'string' && targetContextRaw.trim()) {
+        try {
+          targetContext = JSON.parse(targetContextRaw) as Record<string, unknown>;
+        } catch {
+          targetContext = null;
+        }
+      }
+      return { ...rest, targetContext };
+    });
   });
 
   app.post<{ Params: { reportId: string } }>(
@@ -264,6 +277,19 @@ export function registerAdminRoutes(
         db.prepare(
           "UPDATE posts SET status = 'deleted', deleted_reason = ?, deleted_at = ? WHERE id = ?"
         ).run(reason, nowIso, rep.target_id);
+      } else if (rep.target_type === 'thread_comment') {
+        const hasChild = db
+          .prepare('SELECT 1 FROM thread_replies WHERE parent_comment_id = ? LIMIT 1')
+          .get(rep.target_id);
+        if (hasChild) {
+          db.prepare(
+            "UPDATE thread_replies SET status = 'deleted', content = '[deleted]', deleted_at = ? WHERE id = ?"
+          ).run(nowIso, rep.target_id);
+        } else {
+          db.prepare('DELETE FROM thread_replies WHERE id = ?').run(rep.target_id);
+        }
+      } else if (rep.target_type === 'reel') {
+        db.prepare("UPDATE reels SET status = 'deleted' WHERE id = ?").run(rep.target_id);
       }
 
       appendAuditLog(db, {

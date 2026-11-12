@@ -9,11 +9,20 @@ import {
   OFFICIAL_DEPARTMENTS,
   RESERVED_USERNAMES,
   SECURITY_LIMITS,
+  SHORT_YEAR,
   VALID_SECTIONS,
   VALID_YEARS,
 } from '../config/constants.ts';
 import { isEmailAllowed } from '../config/institution.ts';
-import { checkRateLimit, toPeerUser, toSelfUser } from '../middleware/auth.ts';
+import {
+  checkRateLimit,
+  getViewerRelations,
+  toPeerUser,
+  toSelfUser,
+} from '../middleware/auth.ts';
+import { canViewerSeePost } from '../algorithms/campusRanker.ts';
+import { loadAllPostsWithStats, serializePostForResponse } from './feed.ts';
+import { getDiscoverableUsers } from '../services/discovery.ts';
 import type { AuthMiddleware, LoginAttemptRow, UserRow } from '../types.ts';
 import { hashPassword, signSessionToken, verifyPasswordHash } from '../utils/crypto.ts';
 
@@ -58,6 +67,7 @@ interface UpdateMeBody {
   interests?: string[];
   profilePublic?: boolean;
   discoverableByBranch?: boolean;
+  directoryVisible?: boolean;
   readReceipts?: boolean;
   [key: string]: unknown;
 }
@@ -567,12 +577,12 @@ export function registerAuthRoutes(
             ? 1
             : 0
           : current.profile_public;
+      const rawDiscoverable =
+        updates.directoryVisible !== undefined
+          ? updates.directoryVisible
+          : updates.discoverableByBranch;
       const nextDiscoverable =
-        updates.discoverableByBranch !== undefined
-          ? updates.discoverableByBranch
-            ? 1
-            : 0
-          : current.discoverable;
+        rawDiscoverable !== undefined ? (rawDiscoverable ? 1 : 0) : current.discoverable;
       const nextReadReceipts =
         updates.readReceipts !== undefined ? (updates.readReceipts ? 1 : 0) : current.read_receipts;
 
@@ -639,8 +649,102 @@ export function registerAuthRoutes(
     return { success: true, message: 'Account and authored posts deleted.' };
   });
 
-  // ── 11. Peer Public Profile Lookup (GET /api/v1/users/:username) ───────
+  // ── 11. Discovery Search & Mention Suggestions (GET /api/v1/users/search) ─
+  app.get<{ Querystring: { q?: string; branch?: string; year?: string; limit?: string } }>(
+    '/api/v1/users/search',
+    { preHandler: auth.requireAuth },
+    async (request) => {
+      const items = getDiscoverableUsers(db, request.auth!.userRow.id, {
+        q: String(request.query?.q || ''),
+        branch: String(request.query?.branch || 'all'),
+        year: String(request.query?.year || 'all'),
+        limit: Number(request.query?.limit || 20),
+      });
+      return { items };
+    }
+  );
+
+  // ── 12. Discovery Profile Page Lookup (GET /api/v1/users/:username/profile) ─
   app.get<{ Params: { username: string } }>(
+    '/api/v1/users/:username/profile',
+    { preHandler: auth.requireAuth },
+    async (request, reply) => {
+      const handle = String(request.params.username || '').trim().toLowerCase();
+      const viewerRow = request.auth!.userRow;
+      const target = db
+        .prepare("SELECT * FROM users WHERE username = ? AND role = 'student' AND status = 'active'")
+        .get(handle) as unknown as UserRow | undefined;
+
+      if (!target) {
+        return apiError(reply, 404, 'USER_NOT_FOUND', 'Student profile unavailable.');
+      }
+
+      const relations = getViewerRelations(db, viewerRow.id);
+      if (relations.blockedIds.has(target.id) || relations.blockedByIds.has(target.id)) {
+        return apiError(reply, 404, 'USER_NOT_FOUND', 'Student profile unavailable.');
+      }
+
+      const isSelf = target.id === viewerRow.id;
+      const isFollowing = relations.followingIds.has(target.id);
+      const isRequested = relations.outgoingRequestTargetIds.has(target.id);
+      const isIncomingRequested = Boolean(relations.incomingRequestRequesterIds?.has(target.id));
+
+      // Enforce Directory visibility on the server for discovery profile lookups
+      if (!isSelf && !isFollowing && !target.discoverable) {
+        return apiError(reply, 404, 'USER_NOT_FOUND', 'Student profile unavailable.');
+      }
+
+      let interests: string[] = [];
+      try {
+        interests = JSON.parse(target.interests_json || '[]') as string[];
+      } catch {
+        interests = [];
+      }
+
+      const viewerForFilter = {
+        id: viewerRow.id,
+        branch: viewerRow.branch,
+        year: viewerRow.year,
+        interests: (() => {
+          try {
+            return JSON.parse(viewerRow.interests_json || '[]') as string[];
+          } catch {
+            return [];
+          }
+        })(),
+      };
+
+      const allPosts = loadAllPostsWithStats(db, viewerRow.id).filter(
+        (p) => p.authorId === target.id && canViewerSeePost(p, viewerForFilter, relations)
+      );
+      const publicPosts = allPosts
+        .filter((p) => p.space === 'public')
+        .slice(0, 20)
+        .map(serializePostForResponse);
+      const canSeePersonal = isSelf || Boolean(target.profile_public) || isFollowing;
+      const personalPosts = canSeePersonal
+        ? allPosts.filter((p) => p.space === 'personal').slice(0, 20).map(serializePostForResponse)
+        : [];
+
+      return {
+        user: {
+          ...toPeerUser(target),
+          branch: target.discoverable || isSelf || isFollowing ? target.branch : null,
+          year: target.discoverable || isSelf || isFollowing ? SHORT_YEAR(target.year) : null,
+          interests,
+          isSelf,
+          isFollowing,
+          isRequested,
+          isIncomingRequested,
+        },
+        publicPosts,
+        personalPosts,
+      };
+    }
+  );
+
+  // ── 13. Peer Public Profile Lookup (GET /api/v1/users/:username) ───────
+  app.get<{ Params: { username: string }; Querystring: { context?: string } }>(
     '/api/v1/users/:username',
     { preHandler: auth.optionalAuth },
     async (request, reply) => {
@@ -655,14 +759,20 @@ export function registerAuthRoutes(
 
       const viewerId = request.auth?.userRow?.id || null;
       if (viewerId) {
-        const blocked = db
-          .prepare(
-            'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)'
-          )
-          .get(viewerId, target.id, target.id, viewerId);
-        if (blocked) {
+        const relations = getViewerRelations(db, viewerId);
+        if (relations.blockedIds.has(target.id) || relations.blockedByIds.has(target.id)) {
           return apiError(reply, 404, 'USER_NOT_FOUND', 'User profile unavailable.');
         }
+        if (
+          request.query?.context === 'discovery' &&
+          target.id !== viewerId &&
+          !relations.followingIds.has(target.id) &&
+          !target.discoverable
+        ) {
+          return apiError(reply, 404, 'USER_NOT_FOUND', 'User profile unavailable.');
+        }
+      } else if (request.query?.context === 'discovery' && !target.discoverable) {
+        return apiError(reply, 404, 'USER_NOT_FOUND', 'User profile unavailable.');
       }
 
       return toPeerUser(target);

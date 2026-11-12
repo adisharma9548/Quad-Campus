@@ -81,7 +81,7 @@ export default function PersonalSpaceScreen({
         });
 
   return (
-    <div className="w-full max-w-3xl mx-auto py-6 px-4 space-y-6">
+    <div className="w-full space-y-6">
       {/* Profile Overview Card */}
       <Card className="p-4 sm:p-6 bg-canvas border border-ink/12 rounded-[16px] space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

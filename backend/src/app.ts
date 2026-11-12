@@ -37,7 +37,7 @@ export async function buildApp({
 }: BuildAppOptions = {}): Promise<BuiltQuadApp> {
   const app = Fastify({
     logger,
-    bodyLimit: SECURITY_LIMITS.MAX_UPLOAD_BYTES + 1024 * 1024,
+    bodyLimit: SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES + 4 * 1024 * 1024,
   });
 
   await app.register(cors, {
@@ -53,8 +53,8 @@ export async function buildApp({
 
   await app.register(multipart, {
     limits: {
-      fileSize: SECURITY_LIMITS.MAX_UPLOAD_BYTES,
-      files: 1,
+      fileSize: SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES,
+      files: 3,
     },
   });
 

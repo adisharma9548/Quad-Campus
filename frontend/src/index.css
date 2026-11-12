@@ -117,3 +117,59 @@ body::-webkit-scrollbar {
   width: 0;
   height: 0;
 }
+
+/* Deterministic 3-column authenticated shell layout (<768px single col, 768-1099px 2-col, >=1100px 3-col) */
+.quad-shell-grid {
+  display: block;
+}
+
+.quad-right-rail {
+  display: none;
+}
+
+.quad-inline-footer {
+  display: block;
+}
+
+.quad-compact-week {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .quad-shell-grid {
+    display: grid;
+    grid-template-columns: 80px minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+  }
+}
+
+@media (min-width: 1024px) {
+  .quad-shell-grid {
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 32px;
+  }
+}
+
+@media (min-width: 1024px) and (max-width: 1099px) {
+  .quad-compact-week {
+    display: block;
+  }
+}
+
+@media (min-width: 1100px) {
+  .quad-shell-grid {
+    grid-template-columns: 240px minmax(0, 1fr) 340px;
+    gap: 32px;
+  }
+
+  .quad-right-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .quad-inline-footer {
+    display: none;
+  }
+}

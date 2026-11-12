@@ -5,11 +5,12 @@ import { SECURITY_LIMITS, SHORT_YEAR } from '../config/constants.ts';
 import {
   canViewerSeePost,
   rankCampusReels,
-  rankDiscoverablePeers,
 } from '../algorithms/campusRanker.ts';
-import { formatRelativeTime, getViewerRelations } from '../middleware/auth.ts';
+import { getDiscoverableUsers } from '../services/discovery.ts';
+import { checkRateLimit, formatRelativeTime, getViewerRelations } from '../middleware/auth.ts';
 import type { AuthMiddleware, PostSpace, PostStatus, ReelItem, UserRole, UserStatus } from '../types.ts';
 import { sanitizeUploadedImage, type MediaSanitizeError } from '../utils/exifStripper.ts';
+import { sanitizeUploadedVideo, type VideoSanitizeError } from '../utils/videoStripper.ts';
 
 interface JoinedReelRow {
   id: string;
@@ -30,6 +31,15 @@ interface JoinedReelRow {
   poster_key: string | null;
   poster_alt: string | null;
   media_id: string | null;
+  cover_media_id: string | null;
+  duration_sec: number | null;
+  trim_start: number | null;
+  trim_end: number | null;
+  fit_mode: string | null;
+  audience: string | null;
+  comments_enabled: number | null;
+  mentions_json: string | null;
+  hashtags_json: string | null;
   status: string;
   created_at_ms: number;
 }
@@ -49,20 +59,37 @@ interface JoinedThreadReplyRow {
   id: string;
   thread_id: string;
   author_id: string;
+  parent_comment_id: string | null;
+  reply_to_user_id: string | null;
+  reply_to_username: string | null;
   content: string;
+  status: string;
+  deleted_at: string | null;
   likes_count: number;
   created_at_ms: number;
+  created_at: string;
   username: string;
   initials: string;
 }
 
 interface ThreadReplyDto {
   id: string;
+  threadId: string;
+  parentCommentId: string | null;
+  replyToUserId: string | null;
+  replyToUsername: string | null;
   username: string;
   initials: string;
   content: string;
+  body: string;
   timestamp: string;
+  createdAt: string;
   likes: number;
+  isDeleted: boolean;
+  hasMoreReplies?: boolean;
+  hiddenReplyCount?: number;
+  reportedByMe?: boolean;
+  replies: ThreadReplyDto[];
 }
 
 function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem[] {
@@ -103,6 +130,24 @@ function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem
 
   return rows.map((r) => {
     const showAcademics = Boolean(r.discoverable) || r.author_id === viewerId;
+    let parsedMentions: string[] = [];
+    let parsedHashtags: string[] = [];
+    try {
+      parsedMentions = JSON.parse(r.mentions_json || '[]') as string[];
+    } catch {
+      parsedMentions = [];
+    }
+    try {
+      parsedHashtags = JSON.parse(r.hashtags_json || '[]') as string[];
+    } catch {
+      parsedHashtags = [];
+    }
+    const mediaUrl = r.media_id ? `/api/v1/media/${r.media_id}` : '';
+    const coverUrl = r.cover_media_id ? `/api/v1/media/${r.cover_media_id}` : '';
+    const durationSec = Number(r.duration_sec ?? 30);
+    const trimStart = Number(r.trim_start ?? 0);
+    const trimEnd = Number(r.trim_end ?? durationSec);
+
     return {
       id: r.id,
       authorId: r.author_id,
@@ -125,11 +170,42 @@ function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem
       views: String(r.views_count || 0),
       posterKey: r.poster_key || 'robotics',
       posterAlt: r.poster_alt || `Campus reel by @${r.username}`,
-      mediaUrl: r.media_id ? `/api/v1/media/${r.media_id}` : '',
+      mediaUrl,
+      videoUrl: mediaUrl,
+      coverUrl,
+      durationSec,
+      trimStart,
+      trimEnd,
+      fitMode: r.fit_mode === 'fit' ? 'fit' : 'crop',
+      audience: r.audience === 'followers' ? 'followers' : 'campus',
+      commentsEnabled: r.comments_enabled === undefined || r.comments_enabled === null ? true : Boolean(r.comments_enabled),
+      mentions: parsedMentions,
+      hashtags: parsedHashtags,
       status: r.status,
       createdAtMs: r.created_at_ms,
     };
   });
+}
+
+function formatDurationClock(totalSec: number): string {
+  const safe = Math.max(0, Math.round(totalSec));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+function extractTagsAndMentions(text: string): { hashtags: string[]; mentions: string[] } {
+  const hashtags = Array.from(
+    new Set(
+      (text.match(/#([a-zA-Z0-9_]{2,40})/g) || []).map((t) => t.slice(1).toLowerCase())
+    )
+  ).slice(0, 15);
+  const mentions = Array.from(
+    new Set(
+      (text.match(/@([a-zA-Z0-9_]{2,32})/g) || []).map((m) => m.slice(1).toLowerCase())
+    )
+  ).slice(0, 15);
+  return { hashtags, mentions };
 }
 
 export function registerSocialRoutes(
@@ -137,8 +213,9 @@ export function registerSocialRoutes(
   db: DatabaseSync,
   auth: AuthMiddleware
 ): void {
-  // ── 1. Reels (Ranked & Per-User Seen Tracking) ─────────────────────────
-  app.get('/api/v1/reels', { preHandler: auth.optionalAuth }, async (request) => {
+  // ── 1. Reels (Ranked, Uploadable MP4/MOV, Paginated, Comments) ─────────
+  const listReelsHandler = async (request: import('fastify').FastifyRequest) => {
+    const query = (request.query || {}) as { limit?: string | number; offset?: string | number };
     const viewerRow = request.auth?.userRow || null;
     const viewer = viewerRow
       ? {
@@ -149,37 +226,410 @@ export function registerSocialRoutes(
     const relations = getViewerRelations(db, viewer?.id || null);
     const raw = loadReelsWithStats(db, viewer?.id || null);
     const ranked = rankCampusReels({ reels: raw, viewer, relations });
+    const total = ranked.length;
+    const hasExplicitLimit = query.limit !== undefined;
+    const limit = hasExplicitLimit
+      ? Math.min(Math.max(Number(query.limit || 10), 1), 50)
+      : total || 50;
+    const offset = Math.max(Number(query.offset || 0), 0);
+    const sliced = ranked.slice(offset, offset + limit);
+    const nextOffset = offset + sliced.length;
 
     return {
-      items: ranked.map(({ authorId: _a, authorStatus: _s, score: _sc, ...rest }) => rest),
+      items: sliced.map(({ authorId: _a, authorStatus: _s, score: _sc, ...rest }) => rest),
+      total,
+      hasMore: nextOffset < total,
+      nextOffset,
     };
-  });
+  };
 
-  app.post<{ Body: { caption?: string; tag?: string; duration?: string } }>(
-    '/api/v1/reels',
+  app.get('/api/v1/reels', { preHandler: auth.optionalAuth }, listReelsHandler);
+  app.get('/api/reels', { preHandler: auth.optionalAuth }, listReelsHandler);
+
+  const createReelHandler = async (
+    request: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const viewer = request.auth!.userRow;
+    const reqWithMultipart = request as typeof request & {
+      isMultipart?: () => boolean;
+      parts?: () => AsyncIterableIterator<{
+        type: 'file' | 'field';
+        fieldname: string;
+        mimetype?: string;
+        filename?: string;
+        value?: unknown;
+        toBuffer?: () => Promise<Buffer>;
+      }>;
+    };
+
+    let caption = '';
+    let tag = 'Campus Reel';
+    let duration = '0:30';
+    let durationSec = 30;
+    let trimStart = 0;
+    let trimEnd = 30;
+    let fitMode: 'fit' | 'crop' = 'crop';
+    let audience: 'campus' | 'followers' = 'campus';
+    let commentsEnabled = true;
+    let videoBuffer: Buffer | null = null;
+    let videoMetaHint = '';
+    let coverBuffer: Buffer | null = null;
+
+    if (reqWithMultipart.isMultipart && reqWithMultipart.isMultipart() && reqWithMultipart.parts) {
+      for await (const part of reqWithMultipart.parts()) {
+        if (part.type === 'file') {
+          if (part.fieldname === 'video' && part.toBuffer) {
+            videoBuffer = await part.toBuffer();
+            videoMetaHint = `${part.mimetype || ''} ${part.filename || ''}`;
+          } else if (part.fieldname === 'cover' && part.toBuffer) {
+            coverBuffer = await part.toBuffer();
+          }
+        } else {
+          const val = String(part.value ?? '').trim();
+          switch (part.fieldname) {
+            case 'caption':
+              caption = val;
+              break;
+            case 'tag':
+              tag = val || tag;
+              break;
+            case 'duration':
+              duration = val || duration;
+              break;
+            case 'durationSec':
+              durationSec = Number(val);
+              break;
+            case 'trimStart':
+              trimStart = Number(val);
+              break;
+            case 'trimEnd':
+              trimEnd = Number(val);
+              break;
+            case 'fitMode':
+              fitMode = val === 'fit' ? 'fit' : 'crop';
+              break;
+            case 'audience':
+              audience = val === 'followers' ? 'followers' : 'campus';
+              break;
+            case 'commentsEnabled':
+              commentsEnabled = val !== 'false' && val !== '0';
+              break;
+            case 'coverDataUrl': {
+              const m = val.match(/^data:[^;]+;base64,(.+)$/);
+              if (m) coverBuffer = Buffer.from(m[1], 'base64');
+              break;
+            }
+          }
+        }
+      }
+    } else {
+      const body = (request.body || {}) as Record<string, unknown>;
+      caption = String(body.caption || '').trim();
+      tag = String(body.tag || 'Campus Reel').trim().slice(0, 40) || 'Campus Reel';
+      duration = String(body.duration || '0:30').trim().slice(0, 12);
+      if (body.durationSec !== undefined) durationSec = Number(body.durationSec);
+      if (body.trimStart !== undefined) trimStart = Number(body.trimStart);
+      if (body.trimEnd !== undefined) trimEnd = Number(body.trimEnd);
+      fitMode = body.fitMode === 'fit' ? 'fit' : 'crop';
+      audience = body.audience === 'followers' ? 'followers' : 'campus';
+      commentsEnabled = body.commentsEnabled === undefined ? true : Boolean(body.commentsEnabled);
+    }
+
+    if (!caption && !videoBuffer) {
+      return reply
+        .code(400)
+        .send({ error: { code: 'EMPTY_CAPTION', message: 'Reel caption or video is required.' } });
+    }
+    if (caption.length > SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS) {
+      return reply.code(400).send({
+        error: {
+          code: 'CAPTION_TOO_LONG',
+          message: `Caption exceeds maximum of ${SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS} characters.`,
+        },
+      });
+    }
+
+    let videoMediaId: string | null = null;
+    let coverMediaId: string | null = null;
+
+    if (videoBuffer) {
+      try {
+        const cleanedVideo = sanitizeUploadedVideo(
+          videoBuffer,
+          SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES,
+          videoMetaHint
+        );
+        const reportedOrParsedDuration =
+          cleanedVideo.parsedDurationSec !== null && cleanedVideo.parsedDurationSec > 0
+            ? cleanedVideo.parsedDurationSec
+            : Number.isFinite(durationSec) && durationSec > 0
+              ? durationSec
+              : 0;
+
+        if (
+          (Number.isFinite(durationSec) && durationSec > SECURITY_LIMITS.MAX_REEL_DURATION_SEC) ||
+          reportedOrParsedDuration > SECURITY_LIMITS.MAX_REEL_DURATION_SEC + 0.5
+        ) {
+          return reply.code(400).send({
+            error: {
+              code: 'VIDEO_TOO_LONG',
+              message: `Reels must be ${SECURITY_LIMITS.MAX_REEL_DURATION_SEC} seconds or shorter.`,
+            },
+          });
+        }
+
+        const effectiveDuration = reportedOrParsedDuration > 0 ? reportedOrParsedDuration : 30;
+        const safeTrimStart = Number.isFinite(trimStart) ? Math.max(0, trimStart) : 0;
+        const safeTrimEnd =
+          Number.isFinite(trimEnd) && trimEnd > safeTrimStart
+            ? Math.min(trimEnd, effectiveDuration)
+            : Math.min(effectiveDuration, SECURITY_LIMITS.MAX_REEL_DURATION_SEC);
+        const trimmedSpan = Math.max(0, safeTrimEnd - safeTrimStart);
+
+        if (trimmedSpan > SECURITY_LIMITS.MAX_REEL_DURATION_SEC + 0.5) {
+          return reply.code(400).send({
+            error: {
+              code: 'TRIM_TOO_LONG',
+              message: `Trimmed clip cannot exceed ${SECURITY_LIMITS.MAX_REEL_DURATION_SEC} seconds.`,
+            },
+          });
+        }
+        if (
+          effectiveDuration >= SECURITY_LIMITS.MIN_REEL_DURATION_SEC &&
+          trimmedSpan < SECURITY_LIMITS.MIN_REEL_DURATION_SEC - 0.1
+        ) {
+          return reply.code(400).send({
+            error: {
+              code: 'TRIM_TOO_SHORT',
+              message: `Reels must be at least ${SECURITY_LIMITS.MIN_REEL_DURATION_SEC} seconds long.`,
+            },
+          });
+        }
+
+        durationSec = trimmedSpan || effectiveDuration;
+        trimStart = safeTrimStart;
+        trimEnd = safeTrimEnd;
+        duration = formatDurationClock(durationSec);
+
+        videoMediaId = 'med_' + crypto.randomUUID().slice(0, 12);
+        db.prepare(`
+          INSERT INTO media_assets (id, uploader_id, mime_type, extension, data, exif_stripped, stripped_bytes, created_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        `).run(
+          videoMediaId,
+          viewer.id,
+          cleanedVideo.mimeType,
+          cleanedVideo.extension,
+          cleanedVideo.buffer,
+          cleanedVideo.strippedBytes,
+          new Date().toISOString()
+        );
+      } catch (err) {
+        const vErr = err as Partial<VideoSanitizeError>;
+        return reply.code(vErr.status || 400).send({
+          error: {
+            code: vErr.code || 'INVALID_VIDEO',
+            message: vErr.message || 'Uploaded video could not be processed.',
+          },
+        });
+      }
+    } else {
+      if (!Number.isFinite(durationSec) || durationSec <= 0) durationSec = 30;
+      trimStart = Number.isFinite(trimStart) ? Math.max(0, trimStart) : 0;
+      trimEnd = Number.isFinite(trimEnd) && trimEnd > trimStart ? trimEnd : durationSec;
+    }
+
+    if (coverBuffer) {
+      try {
+        const cleanedCover = sanitizeUploadedImage(coverBuffer, SECURITY_LIMITS.MAX_UPLOAD_BYTES);
+        coverMediaId = 'med_' + crypto.randomUUID().slice(0, 12);
+        db.prepare(`
+          INSERT INTO media_assets (id, uploader_id, mime_type, extension, data, exif_stripped, stripped_bytes, created_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        `).run(
+          coverMediaId,
+          viewer.id,
+          cleanedCover.mimeType,
+          cleanedCover.extension,
+          cleanedCover.buffer,
+          cleanedCover.strippedBytes,
+          new Date().toISOString()
+        );
+      } catch (err) {
+        const mediaErr = err as Partial<MediaSanitizeError>;
+        return reply.code(mediaErr.status || 400).send({
+          error: {
+            code: mediaErr.code || 'INVALID_COVER',
+            message: mediaErr.message || 'Cover image is invalid.',
+          },
+        });
+      }
+    }
+
+    const { hashtags, mentions } = extractTagsAndMentions(caption);
+    if (hashtags.length > 0 && tag === 'Campus Reel') {
+      tag = hashtags[0].slice(0, 40);
+    }
+
+    // Mentions strictly respect Part 2 Directory visibility rules
+    const discoverablePeers = getDiscoverableUsers(db, viewer.id, { limit: 200 });
+    const discoverableMap = new Map(discoverablePeers.map((p) => [p.username.toLowerCase(), p]));
+    const allowedMentions = mentions.filter((uname) => discoverableMap.has(uname));
+
+    const id = 'reel_' + crypto.randomUUID().slice(0, 10);
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    db.prepare(`
+      INSERT INTO reels (
+        id, author_id, caption, tag, duration, poster_key, poster_alt,
+        media_id, cover_media_id, duration_sec, trim_start, trim_end,
+        fit_mode, audience, comments_enabled, mentions_json, hashtags_json,
+        status, created_at_ms, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, 'robotics', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    `).run(
+      id,
+      viewer.id,
+      caption.slice(0, SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS),
+      tag.slice(0, 40),
+      duration.slice(0, 12),
+      `Campus reel by @${viewer.username}`,
+      videoMediaId,
+      coverMediaId,
+      durationSec,
+      trimStart,
+      trimEnd,
+      fitMode,
+      audience,
+      commentsEnabled ? 1 : 0,
+      JSON.stringify(allowedMentions),
+      JSON.stringify(hashtags),
+      now,
+      nowIso
+    );
+
+    if (allowedMentions.length > 0) {
+      const insertNotif = db.prepare(
+        'INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      );
+      for (const uname of allowedMentions) {
+        const peer = discoverableMap.get(uname);
+        if (peer && String(peer.id) !== viewer.id) {
+          insertNotif.run(
+            'n_' + crypto.randomUUID().slice(0, 10),
+            String(peer.id),
+            viewer.username,
+            'reel_mention',
+            `@${viewer.username} mentioned you in a reel`,
+            'reel',
+            id,
+            now,
+            nowIso
+          );
+        }
+      }
+    }
+
+    const created = loadReelsWithStats(db, viewer.id).find((r) => r.id === id);
+    if (!created) {
+      return reply.code(500).send({ error: { code: 'CREATE_FAILED', message: 'Unable to load created reel.' } });
+    }
+    const { authorId: _a, authorStatus: _s, ...publicReel } = created;
+    return reply.code(201).send(publicReel);
+  };
+
+  app.post('/api/v1/reels', { preHandler: auth.requireAuth }, createReelHandler);
+  app.post('/api/reels', { preHandler: auth.requireAuth }, createReelHandler);
+
+  app.get<{ Params: { id: string } }>(
+    '/api/v1/reels/:id/comments',
+    { preHandler: auth.optionalAuth },
+    async (request, reply) => {
+      const reelId = String(request.params.id);
+      const reelRow = db
+        .prepare("SELECT id, comments_enabled FROM reels WHERE id = ? AND status = 'active'")
+        .get(reelId) as { id: string; comments_enabled: number | null } | undefined;
+      if (!reelRow) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+      }
+      const viewerId = request.auth?.userRow?.id || null;
+      const relations = getViewerRelations(db, viewerId);
+      const rows = db
+        .prepare(`
+          SELECT rc.id, rc.author_id, rc.content, rc.created_at_ms, rc.created_at, u.username, u.avatar_initials AS initials
+          FROM reel_comments rc
+          JOIN users u ON u.id = rc.author_id
+          WHERE rc.reel_id = ? AND u.status != 'banned' AND u.status != 'deleted'
+          ORDER BY rc.created_at_ms ASC
+        `)
+        .all(reelId) as Array<{
+          id: string;
+          author_id: string;
+          content: string;
+          created_at_ms: number;
+          created_at: string;
+          username: string;
+          initials: string;
+        }>;
+      const items = rows
+        .filter(
+          (r) =>
+            !relations.blockedIds.has(r.author_id) &&
+            !relations.blockedByIds.has(r.author_id) &&
+            !relations.mutedIds.has(r.author_id)
+        )
+        .map((r) => ({
+          id: r.id,
+          username: r.username,
+          initials: r.initials,
+          content: r.content,
+          timestamp: formatRelativeTime(r.created_at_ms),
+        }));
+      return {
+        items,
+        commentsEnabled: reelRow.comments_enabled === null ? true : Boolean(reelRow.comments_enabled),
+      };
+    }
+  );
+
+  app.post<{ Params: { id: string }; Body: { content?: string } }>(
+    '/api/v1/reels/:id/comments',
     { preHandler: auth.requireAuth },
     async (request, reply) => {
-      const viewer = request.auth!.userRow;
-      const caption = String(request.body?.caption || '').trim();
-      const tag = String(request.body?.tag || 'Campus Reel').trim().slice(0, 40);
-      const duration = String(request.body?.duration || '0:30').trim().slice(0, 12);
-
-      if (!caption) {
+      const reelId = String(request.params.id);
+      const reelRow = db
+        .prepare("SELECT id, author_id, comments_enabled FROM reels WHERE id = ? AND status = 'active'")
+        .get(reelId) as { id: string; author_id: string; comments_enabled: number | null } | undefined;
+      if (!reelRow) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+      }
+      if (reelRow.comments_enabled === 0) {
+        return reply.code(403).send({
+          error: { code: 'COMMENTS_DISABLED', message: 'Comments are turned off for this reel.' },
+        });
+      }
+      const content = String(request.body?.content || '').trim();
+      if (!content) {
         return reply
           .code(400)
-          .send({ error: { code: 'EMPTY_CAPTION', message: 'Reel caption is required.' } });
+          .send({ error: { code: 'EMPTY_COMMENT', message: 'Comment cannot be empty.' } });
       }
-
-      const id = 'reel_' + crypto.randomUUID().slice(0, 10);
+      const viewer = request.auth!.userRow;
+      const id = 'rc_' + crypto.randomUUID().slice(0, 10);
       const now = Date.now();
-      const nowIso = new Date(now).toISOString();
-      db.prepare(`
-        INSERT INTO reels (id, author_id, caption, tag, duration, poster_key, poster_alt, status, created_at_ms, created_at)
-        VALUES (?, ?, ?, ?, ?, 'robotics', ?, 'active', ?, ?)
-      `).run(id, viewer.id, caption.slice(0, 500), tag, duration, `Campus reel by @${viewer.username}`, now, nowIso);
+      const createdAt = new Date(now).toISOString();
+      db.prepare(
+        'INSERT INTO reel_comments (id, reel_id, author_id, content, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(id, reelId, viewer.id, content.slice(0, 600), now, createdAt);
 
-      const created = loadReelsWithStats(db, viewer.id).find((r) => r.id === id);
-      return reply.code(201).send(created);
+      return reply.code(201).send({
+        id,
+        username: viewer.username,
+        initials: viewer.avatar_initials,
+        content: content.slice(0, 600),
+        timestamp: 'Just now',
+      });
     }
   );
 
@@ -234,70 +684,196 @@ export function registerSocialRoutes(
     }
   );
 
-  // ── 2. Threads & Connected Replies ─────────────────────────────────────
-  app.get('/api/v1/threads', { preHandler: auth.optionalAuth }, async (request) => {
-    const viewerId = request.auth?.userRow?.id || null;
-    const relations = getViewerRelations(db, viewerId);
+  // ── 2. Threads & Connected Nested Replies ──────────────────────────────
+  const DEFAULT_THREAD_REPLY_DEPTH = 2; // 0-indexed: loads levels 0, 1, 2 initially
 
-    const rows = db
-      .prepare(`
-        SELECT t.*, u.username, u.avatar_initials AS initials, u.status AS author_status,
-          (SELECT COUNT(*) FROM thread_likes tl WHERE tl.thread_id = t.id) AS likes_count
-        FROM threads t
-        JOIN users u ON u.id = t.author_id
-        WHERE t.status = 'active' AND u.status != 'banned' AND u.status != 'deleted'
-        ORDER BY t.created_at_ms DESC
-      `)
-      .all() as unknown as JoinedThreadRow[];
-
-    const likedIds = new Set<string>();
-    if (viewerId) {
-      for (const l of db
-        .prepare('SELECT thread_id FROM thread_likes WHERE user_id = ?')
-        .all(viewerId) as Array<{ thread_id: string }>) {
-        likedIds.add(l.thread_id);
-      }
+  const filterVisibleReplyTree = (
+    rows: JoinedThreadReplyRow[],
+    relations: ReturnType<typeof getViewerRelations>
+  ): {
+    childrenByParent: Map<string, JoinedThreadReplyRow[]>;
+    rowById: Map<string, JoinedThreadReplyRow>;
+  } => {
+    const rawChildren = new Map<string, JoinedThreadReplyRow[]>();
+    const rowById = new Map<string, JoinedThreadReplyRow>();
+    for (const row of rows) {
+      rowById.set(row.id, row);
+      const key = row.parent_comment_id || '__root__';
+      if (!rawChildren.has(key)) rawChildren.set(key, []);
+      rawChildren.get(key)!.push(row);
     }
 
-    const replyRows = db
-      .prepare(`
-        SELECT tr.*, u.username, u.avatar_initials AS initials, u.status AS author_status
-        FROM thread_replies tr
-        JOIN users u ON u.id = tr.author_id
-        WHERE u.status != 'banned' AND u.status != 'deleted'
-        ORDER BY tr.created_at_ms ASC
-      `)
-      .all() as unknown as JoinedThreadReplyRow[];
+    const isBlockedAuthor = (authorId: string) =>
+      relations.blockedIds.has(authorId) ||
+      relations.blockedByIds.has(authorId) ||
+      relations.mutedIds.has(authorId);
 
-    const repliesByThread = new Map<string, ThreadReplyDto[]>();
-    for (const rep of replyRows) {
-      if (
+    // Keep a node if it is active & visible, OR if it has any visible descendant
+    const keepMemo = new Map<string, boolean>();
+    const shouldKeep = (id: string): boolean => {
+      if (keepMemo.has(id)) return keepMemo.get(id)!;
+      const row = rowById.get(id);
+      if (!row) return false;
+      const kids = rawChildren.get(id) || [];
+      const hasVisibleChild = kids.some((k) => shouldKeep(k.id));
+      const selfVisible = row.status !== 'deleted' && !isBlockedAuthor(row.author_id);
+      const keep = selfVisible || hasVisibleChild;
+      keepMemo.set(id, keep);
+      return keep;
+    };
+
+    const childrenByParent = new Map<string, JoinedThreadReplyRow[]>();
+    for (const [parentKey, list] of rawChildren.entries()) {
+      const kept = list.filter((r) => shouldKeep(r.id));
+      if (kept.length > 0) {
+        childrenByParent.set(parentKey, kept);
+      }
+    }
+    return { childrenByParent, rowById };
+  };
+
+  const countSubtreeReplies = (
+    parentId: string,
+    childrenByParent: Map<string, JoinedThreadReplyRow[]>
+  ): number => {
+    const kids = childrenByParent.get(parentId) || [];
+    let total = kids.length;
+    for (const k of kids) {
+      total += countSubtreeReplies(k.id, childrenByParent);
+    }
+    return total;
+  };
+
+  const getReportedThreadCommentIds = (viewerId: string | null): Set<string> => {
+    const reported = new Set<string>();
+    if (!viewerId) return reported;
+    const rows = db
+      .prepare(
+        "SELECT target_id FROM reports WHERE reporter_id = ? AND target_type = 'thread_comment' AND status != 'dismissed'"
+      )
+      .all(viewerId) as Array<{ target_id: string }>;
+    for (const r of rows) reported.add(r.target_id);
+    return reported;
+  };
+
+  const buildReplySubtree = (
+    parentKey: string,
+    childrenByParent: Map<string, JoinedThreadReplyRow[]>,
+    relations: ReturnType<typeof getViewerRelations>,
+    depth: number,
+    maxDepth: number,
+    reportedIds: Set<string> = new Set()
+  ): ThreadReplyDto[] => {
+    const list = childrenByParent.get(parentKey) || [];
+    return list.map((rep) => {
+      const isHiddenAuthor =
         relations.blockedIds.has(rep.author_id) ||
         relations.blockedByIds.has(rep.author_id) ||
-        relations.mutedIds.has(rep.author_id)
-      ) {
-        continue;
-      }
-      if (!repliesByThread.has(rep.thread_id)) repliesByThread.set(rep.thread_id, []);
-      repliesByThread.get(rep.thread_id)!.push({
-        id: rep.id,
-        username: rep.username,
-        initials: rep.initials,
-        content: rep.content,
-        timestamp: formatRelativeTime(rep.created_at_ms),
-        likes: rep.likes_count,
-      });
-    }
+        relations.mutedIds.has(rep.author_id);
+      const isDeleted = rep.status === 'deleted' || isHiddenAuthor;
+      const directChildren = childrenByParent.get(rep.id) || [];
+      const canExpandChildren = depth < maxDepth;
+      const nestedReplies = canExpandChildren
+        ? buildReplySubtree(rep.id, childrenByParent, relations, depth + 1, maxDepth, reportedIds)
+        : [];
+      const hiddenCount =
+        !canExpandChildren && directChildren.length > 0
+          ? countSubtreeReplies(rep.id, childrenByParent)
+          : 0;
 
-    const items = rows
-      .filter(
+      return {
+        id: rep.id,
+        threadId: rep.thread_id,
+        parentCommentId: rep.parent_comment_id,
+        replyToUserId: rep.reply_to_user_id,
+        replyToUsername: rep.reply_to_username,
+        username: isDeleted ? '[deleted]' : rep.username,
+        initials: isDeleted ? 'DEL' : rep.initials,
+        content: isDeleted ? '[deleted]' : rep.content,
+        body: isDeleted ? '[deleted]' : rep.content,
+        timestamp: formatRelativeTime(rep.created_at_ms),
+        createdAt: rep.created_at,
+        likes: isDeleted ? 0 : Number(rep.likes_count || 0),
+        isDeleted,
+        hasMoreReplies: hiddenCount > 0,
+        hiddenReplyCount: hiddenCount,
+        reportedByMe: reportedIds.has(rep.id),
+        replies: nestedReplies,
+      };
+    });
+  };
+
+  app.get<{ Querystring: { limit?: string | number; offset?: string | number; maxDepth?: string | number } }>(
+    '/api/v1/threads',
+    { preHandler: auth.optionalAuth },
+    async (request) => {
+      const viewerId = request.auth?.userRow?.id || null;
+      const relations = getViewerRelations(db, viewerId);
+      const limit = Math.min(Math.max(Number(request.query?.limit || 15), 1), 50);
+      const offset = Math.max(Number(request.query?.offset || 0), 0);
+      const maxDepth = Math.min(
+        Math.max(
+          request.query?.maxDepth !== undefined
+            ? Number(request.query.maxDepth)
+            : DEFAULT_THREAD_REPLY_DEPTH,
+          0
+        ),
+        25
+      );
+
+      const rows = db
+        .prepare(`
+          SELECT t.*, u.username, u.avatar_initials AS initials, u.status AS author_status,
+            (SELECT COUNT(*) FROM thread_likes tl WHERE tl.thread_id = t.id) AS likes_count
+          FROM threads t
+          JOIN users u ON u.id = t.author_id
+          WHERE t.status = 'active' AND u.status != 'banned' AND u.status != 'deleted'
+          ORDER BY t.created_at_ms DESC
+        `)
+        .all() as unknown as JoinedThreadRow[];
+
+      const visibleThreads = rows.filter(
         (t) =>
           !relations.blockedIds.has(t.author_id) &&
           !relations.blockedByIds.has(t.author_id) &&
           !relations.mutedIds.has(t.author_id)
-      )
-      .map((t) => {
-        const replies = repliesByThread.get(t.id) || [];
+      );
+
+      const pageThreads = visibleThreads.slice(offset, offset + limit);
+      const pageThreadIds = new Set(pageThreads.map((t) => t.id));
+
+      const likedIds = new Set<string>();
+      if (viewerId) {
+        for (const l of db
+          .prepare('SELECT thread_id FROM thread_likes WHERE user_id = ?')
+          .all(viewerId) as Array<{ thread_id: string }>) {
+          likedIds.add(l.thread_id);
+        }
+      }
+
+      const replyRows = db
+        .prepare(`
+          SELECT tr.*, u.username, u.avatar_initials AS initials, u.status AS author_status
+          FROM thread_replies tr
+          JOIN users u ON u.id = tr.author_id
+          WHERE u.status != 'banned' AND u.status != 'deleted'
+          ORDER BY tr.created_at_ms ASC
+        `)
+        .all() as unknown as JoinedThreadReplyRow[];
+
+      const rawByThread = new Map<string, JoinedThreadReplyRow[]>();
+      for (const rep of replyRows) {
+        if (!pageThreadIds.has(rep.thread_id)) continue;
+        if (!rawByThread.has(rep.thread_id)) rawByThread.set(rep.thread_id, []);
+        rawByThread.get(rep.thread_id)!.push(rep);
+      }
+
+      const reportedIds = getReportedThreadCommentIds(viewerId);
+      const items = pageThreads.map((t) => {
+        const threadReplyRows = rawByThread.get(t.id) || [];
+        const { childrenByParent } = filterVisibleReplyTree(threadReplyRows, relations);
+        const totalReplyCount = countSubtreeReplies('__root__', childrenByParent);
+        const replies = buildReplySubtree('__root__', childrenByParent, relations, 0, maxDepth, reportedIds);
         return {
           id: t.id,
           username: t.username,
@@ -306,12 +882,68 @@ export function registerSocialRoutes(
           timestamp: formatRelativeTime(t.created_at_ms),
           likes: Number(t.likes_count || 0),
           isLiked: likedIds.has(t.id),
-          replyCount: replies.length,
+          replyCount: totalReplyCount,
           replies,
         };
       });
 
-    return { items };
+      const nextOffset = offset + pageThreads.length;
+      return {
+        items,
+        total: visibleThreads.length,
+        hasMore: nextOffset < visibleThreads.length,
+        nextOffset,
+      };
+    }
+  );
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { parentId?: string; maxDepth?: string | number; limit?: string | number; offset?: string | number };
+  }>('/api/v1/threads/:id/replies', { preHandler: auth.optionalAuth }, async (request, reply) => {
+    const tid = String(request.params.id);
+    const thread = db
+      .prepare("SELECT id FROM threads WHERE id = ? AND status = 'active'")
+      .get(tid);
+    if (!thread) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
+    }
+
+    const viewerId = request.auth?.userRow?.id || null;
+    const relations = getViewerRelations(db, viewerId);
+    const parentId = request.query?.parentId ? String(request.query.parentId) : '__root__';
+    const maxDepth = Math.min(Math.max(Number(request.query?.maxDepth ?? 3), 0), 25);
+    const limit = Math.min(Math.max(Number(request.query?.limit || 50), 1), 100);
+    const offset = Math.max(Number(request.query?.offset || 0), 0);
+
+    const rows = db
+      .prepare(`
+        SELECT tr.*, u.username, u.avatar_initials AS initials, u.status AS author_status
+        FROM thread_replies tr
+        JOIN users u ON u.id = tr.author_id
+        WHERE tr.thread_id = ? AND u.status != 'banned' AND u.status != 'deleted'
+        ORDER BY tr.created_at_ms ASC
+      `)
+      .all(tid) as unknown as JoinedThreadReplyRow[];
+
+    if (parentId !== '__root__' && !rows.some((r) => r.id === parentId)) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'PARENT_NOT_FOUND', message: 'Parent comment not found in this thread.' } });
+    }
+
+    const { childrenByParent } = filterVisibleReplyTree(rows, relations);
+    const reportedIds = getReportedThreadCommentIds(viewerId);
+    const fullSubtree = buildReplySubtree(parentId, childrenByParent, relations, 0, maxDepth, reportedIds);
+    const items = fullSubtree.slice(offset, offset + limit);
+
+    return {
+      threadId: tid,
+      parentId: parentId === '__root__' ? null : parentId,
+      items,
+      total: fullSubtree.length,
+      hasMore: offset + items.length < fullSubtree.length,
+    };
   });
 
   app.post<{ Body: { content?: string } }>(
@@ -369,100 +1001,219 @@ export function registerSocialRoutes(
     }
   );
 
-  app.post<{ Params: { id: string }; Body: { content?: string } }>(
-    '/api/v1/threads/:id/replies',
+  app.post<{
+    Params: { id: string };
+    Body: { content?: string; body?: string; parentCommentId?: string | null };
+  }>('/api/v1/threads/:id/replies', { preHandler: auth.requireAuth }, async (request, reply) => {
+    const viewer = request.auth!.userRow;
+    const rateKey = `thread_reply:${viewer.id}`;
+    const rate = checkRateLimit(db, rateKey, SECURITY_LIMITS.THREAD_REPLIES_PER_MIN, 60_000);
+    if (!rate.allowed) {
+      return reply.code(429).send({
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'Too many replies in a short time. Please wait a moment before replying again.',
+        },
+      });
+    }
+
+    const tid = String(request.params.id);
+    const thread = db
+      .prepare("SELECT id, author_id FROM threads WHERE id = ? AND status = 'active'")
+      .get(tid) as { id: string; author_id: string } | undefined;
+    if (!thread) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
+    }
+
+    const rawBody = String(request.body?.body ?? request.body?.content ?? '').trim();
+    if (!rawBody) {
+      return reply
+        .code(400)
+        .send({ error: { code: 'EMPTY_REPLY', message: 'Reply cannot be empty.' } });
+    }
+    if (rawBody.length > SECURITY_LIMITS.THREAD_REPLY_MAX_CHARS) {
+      return reply.code(400).send({
+        error: {
+          code: 'REPLY_TOO_LONG',
+          message: `Reply exceeds maximum length of ${SECURITY_LIMITS.THREAD_REPLY_MAX_CHARS} characters.`,
+        },
+      });
+    }
+
+    const parentCommentId = request.body?.parentCommentId
+      ? String(request.body.parentCommentId).trim()
+      : null;
+
+    let replyToUserId: string | null = null;
+    let replyToUsername: string | null = null;
+
+    if (parentCommentId) {
+      const parentRow = db
+        .prepare(
+          `SELECT tr.id, tr.thread_id, tr.author_id, tr.status, u.username AS author_username
+           FROM thread_replies tr
+           JOIN users u ON u.id = tr.author_id
+           WHERE tr.id = ?`
+        )
+        .get(parentCommentId) as
+        | {
+            id: string;
+            thread_id: string;
+            author_id: string;
+            status: string;
+            author_username: string;
+          }
+        | undefined;
+
+      if (!parentRow) {
+        return reply
+          .code(404)
+          .send({ error: { code: 'PARENT_NOT_FOUND', message: 'Parent comment not found.' } });
+      }
+      if (parentRow.thread_id !== tid) {
+        return reply.code(400).send({
+          error: {
+            code: 'INVALID_PARENT',
+            message: 'Parent comment belongs to a different thread.',
+          },
+        });
+      }
+      if (parentRow.status === 'deleted') {
+        return reply.code(400).send({
+          error: {
+            code: 'PARENT_DELETED',
+            message: 'Cannot reply to a deleted comment.',
+          },
+        });
+      }
+      replyToUserId = parentRow.author_id;
+      replyToUsername = parentRow.author_username;
+    }
+
+    const id = 'tr_' + crypto.randomUUID().slice(0, 10);
+    const now = Date.now();
+    const createdAt = new Date(now).toISOString();
+
+    db.prepare(
+      `INSERT INTO thread_replies
+        (id, thread_id, author_id, parent_comment_id, reply_to_user_id, reply_to_username, content, status, likes_count, created_at_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?)`
+    ).run(id, tid, viewer.id, parentCommentId, replyToUserId, replyToUsername, rawBody, now, createdAt);
+
+    // Notify the user being replied to (and thread owner if distinct)
+    const insertNotif = db.prepare(
+      'INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    if (replyToUserId && replyToUserId !== viewer.id) {
+      insertNotif.run(
+        'n_' + crypto.randomUUID().slice(0, 10),
+        replyToUserId,
+        viewer.username,
+        'thread_reply',
+        `@${viewer.username} replied to your comment`,
+        'thread',
+        tid,
+        now,
+        createdAt
+      );
+    }
+    if (thread.author_id !== viewer.id && thread.author_id !== replyToUserId) {
+      insertNotif.run(
+        'n_' + crypto.randomUUID().slice(0, 10),
+        thread.author_id,
+        viewer.username,
+        'thread_reply',
+        `@${viewer.username} replied on your thread`,
+        'thread',
+        tid,
+        now,
+        createdAt
+      );
+    }
+
+    return reply.code(201).send({
+      id,
+      threadId: tid,
+      parentCommentId,
+      replyToUserId,
+      replyToUsername,
+      username: viewer.username,
+      initials: viewer.avatar_initials,
+      content: rawBody,
+      body: rawBody,
+      timestamp: 'Just now',
+      createdAt,
+      likes: 0,
+      isDeleted: false,
+      hasMoreReplies: false,
+      hiddenReplyCount: 0,
+      replies: [],
+    });
+  });
+
+  app.delete<{ Params: { threadId: string; replyId: string } }>(
+    '/api/v1/threads/:threadId/replies/:replyId',
     { preHandler: auth.requireAuth },
     async (request, reply) => {
-      const tid = String(request.params.id);
-      const thread = db
-        .prepare("SELECT id, author_id FROM threads WHERE id = ? AND status = 'active'")
-        .get(tid);
-      if (!thread) {
-        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
-      }
-
-      const content = String(request.body?.content || '').trim();
-      if (!content) {
-        return reply
-          .code(400)
-          .send({ error: { code: 'EMPTY_REPLY', message: 'Reply cannot be empty.' } });
-      }
+      const tid = String(request.params.threadId);
+      const rid = String(request.params.replyId);
       const viewer = request.auth!.userRow;
-      const id = 'tr_' + crypto.randomUUID().slice(0, 10);
-      const now = Date.now();
-      db.prepare(
-        'INSERT INTO thread_replies (id, thread_id, author_id, content, likes_count, created_at_ms, created_at) VALUES (?, ?, ?, ?, 0, ?, ?)'
-      ).run(id, tid, viewer.id, content.slice(0, 1000), now, new Date(now).toISOString());
 
-      return reply.code(201).send({
-        id,
-        username: viewer.username,
-        initials: viewer.avatar_initials,
-        content: content.slice(0, 1000),
-        timestamp: 'Just now',
-        likes: 0,
-      });
+      const row = db
+        .prepare('SELECT id, thread_id, author_id, status FROM thread_replies WHERE id = ? AND thread_id = ?')
+        .get(rid, tid) as { id: string; thread_id: string; author_id: string; status: string } | undefined;
+
+      if (!row) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reply not found.' } });
+      }
+      if (row.author_id !== viewer.id && viewer.role !== 'admin') {
+        return reply.code(403).send({
+          error: { code: 'FORBIDDEN', message: 'You can only delete your own comments.' },
+        });
+      }
+
+      const hasChild = db
+        .prepare('SELECT 1 FROM thread_replies WHERE parent_comment_id = ? LIMIT 1')
+        .get(rid);
+      const nowIso = new Date().toISOString();
+
+      if (hasChild) {
+        db.prepare(
+          "UPDATE thread_replies SET status = 'deleted', content = '[deleted]', deleted_at = ? WHERE id = ?"
+        ).run(nowIso, rid);
+        return { deleted: true, softDeleted: true, id: rid, content: '[deleted]' };
+      }
+
+      db.prepare('DELETE FROM thread_replies WHERE id = ?').run(rid);
+      return { deleted: true, softDeleted: false, id: rid };
     }
   );
 
-  // ── 3. Opt-In Campus Directory (GET /api/v1/directory) ─────────────────
+  // ── 3. Opt-In Campus Directory & Who To Follow (Single Source of Truth) ──
   app.get<{ Querystring: { q?: string; branch?: string; year?: string; limit?: string | number } }>(
     '/api/v1/directory',
     { preHandler: auth.optionalAuth },
     async (request) => {
-      const viewerRow = request.auth?.userRow || null;
-      const viewer = viewerRow
-        ? {
-            id: viewerRow.id,
-            branch: viewerRow.branch,
-            year: viewerRow.year,
-            interests: JSON.parse(viewerRow.interests_json || '[]') as string[],
-          }
-        : null;
-      const relations = getViewerRelations(db, viewer?.id || null);
-
-      const rawUsers = db.prepare('SELECT * FROM users').all() as Array<{
-        id: string;
-        username: string;
-        avatar_initials: string;
-        role: UserRole;
-        status: UserStatus;
-        discoverable: number;
-        branch: string;
-        year: string;
-        bio: string;
-        interests_json: string | null;
-      }>;
-
-      const rows = rawUsers.map((u) => {
-        let interests: string[] = [];
-        try {
-          interests = JSON.parse(u.interests_json || '[]') as string[];
-        } catch {
-          interests = [];
-        }
-        return {
-          id: u.id,
-          username: u.username,
-          avatarInitials: u.avatar_initials,
-          role: u.role,
-          status: u.status,
-          discoverable: Boolean(u.discoverable),
-          branch: u.branch,
-          year: u.year,
-          bio: u.bio,
-          interests,
-        };
+      const items = getDiscoverableUsers(db, request.auth?.userRow?.id || null, {
+        q: String(request.query?.q || ''),
+        branch: String(request.query?.branch || 'all'),
+        year: String(request.query?.year || 'all'),
+        limit: Number(request.query?.limit || 30),
       });
 
-      const items = rankDiscoverablePeers({
-        candidates: rows,
-        viewer,
-        relations,
-        query: String(request.query?.q || ''),
-        branchFilter: String(request.query?.branch || 'all'),
-        yearFilter: String(request.query?.year || 'all'),
-        limit: Number(request.query?.limit || 30),
+      return { items };
+    }
+  );
+
+  app.get<{ Querystring: { q?: string; branch?: string; year?: string; limit?: string | number } }>(
+    '/api/v1/who-to-follow',
+    { preHandler: auth.requireAuth },
+    async (request) => {
+      const items = getDiscoverableUsers(db, request.auth!.userRow.id, {
+        q: String(request.query?.q || ''),
+        branch: String(request.query?.branch || 'all'),
+        year: String(request.query?.year || 'all'),
+        limit: Number(request.query?.limit || 3),
       });
 
       return { items };
@@ -934,13 +1685,16 @@ export function registerSocialRoutes(
   }>('/api/v1/reports', { preHandler: auth.requireAuth }, async (request, reply) => {
     const reporter = request.auth!.userRow;
     const body = request.body || {};
-    const targetType = ['post', 'comment', 'user', 'reel', 'thread'].includes(body.targetType || '')
+    const targetType = ['post', 'comment', 'user', 'reel', 'thread', 'thread_comment'].includes(
+      body.targetType || ''
+    )
       ? String(body.targetType)
       : 'user';
     const targetId = String(body.targetId || body.targetUsername || '').trim();
-    const reason = String(body.reason || 'Harassment or Bullying').trim();
+    const reason = String(body.reason || 'Harassment or bullying').trim().slice(0, 120);
     const details = String(body.details || '').trim().slice(0, 600);
-    const snippet = String(body.contentSnippet || '').trim().slice(0, 240);
+    let snippet = String(body.contentSnippet || '').trim().slice(0, 240);
+    let targetContext = '';
 
     if (!targetId) {
       return reply
@@ -948,10 +1702,62 @@ export function registerSocialRoutes(
         .send({ error: { code: 'MISSING_TARGET', message: 'Report target is required.' } });
     }
 
+    if (targetType === 'thread_comment') {
+      const commentRow = db
+        .prepare(
+          `SELECT tr.id, tr.thread_id, tr.author_id, tr.content, tr.status, u.username AS author_username
+           FROM thread_replies tr
+           JOIN users u ON u.id = tr.author_id
+           WHERE tr.id = ?`
+        )
+        .get(targetId) as
+        | {
+            id: string;
+            thread_id: string;
+            author_id: string;
+            content: string;
+            status: string;
+            author_username: string;
+          }
+        | undefined;
+
+      if (!commentRow || commentRow.status === 'deleted') {
+        return reply
+          .code(404)
+          .send({ error: { code: 'TARGET_NOT_FOUND', message: 'Comment not found.' } });
+      }
+      if (commentRow.author_id === reporter.id) {
+        return reply
+          .code(400)
+          .send({ error: { code: 'SELF_REPORT', message: 'You cannot report your own comment.' } });
+      }
+      if (!snippet) {
+        snippet = String(commentRow.content || '').slice(0, 240);
+      }
+      targetContext = JSON.stringify({
+        threadId: commentRow.thread_id,
+        commentId: commentRow.id,
+        authorUsername: commentRow.author_username,
+      });
+    }
+
+    const existing = db
+      .prepare('SELECT id FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ?')
+      .get(reporter.id, targetType, targetId) as { id: string } | undefined;
+
+    if (existing) {
+      return reply.code(409).send({
+        error: {
+          code: 'DUPLICATE_REPORT',
+          message: 'You already reported this',
+        },
+      });
+    }
+
     const id = 'rep_' + crypto.randomUUID().slice(0, 10);
     db.prepare(`
-      INSERT INTO reports (id, reporter_id, target_type, target_id, reason, details, content_snippet, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      INSERT INTO reports (id, reporter_id, target_type, target_id, reason, details, content_snippet, target_context, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
     `).run(
       id,
       reporter.id,
@@ -960,6 +1766,7 @@ export function registerSocialRoutes(
       reason,
       details,
       snippet,
+      targetContext,
       new Date().toISOString()
     );
 
@@ -969,6 +1776,30 @@ export function registerSocialRoutes(
       message: 'Confidential report received. Our safety team will review it.',
     });
   });
+
+  app.delete<{ Params: { targetType: string; targetId: string } }>(
+    '/api/v1/reports/target/:targetType/:targetId',
+    { preHandler: auth.requireAuth },
+    async (request, reply) => {
+      const reporter = request.auth!.userRow;
+      const targetType = String(request.params.targetType || '').trim();
+      const targetId = String(request.params.targetId || '').trim();
+      const existing = db
+        .prepare(
+          "SELECT id FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ? AND status = 'pending'"
+        )
+        .get(reporter.id, targetType, targetId) as { id: string } | undefined;
+
+      if (!existing) {
+        return reply.code(404).send({
+          error: { code: 'NOT_FOUND', message: 'No pending report found to undo.' },
+        });
+      }
+
+      db.prepare('DELETE FROM reports WHERE id = ?').run(existing.id);
+      return { undone: true, id: existing.id };
+    }
+  );
 
   app.post('/api/v1/notifications/read-all', { preHandler: auth.requireAuth }, async (request) => {
     db.prepare('UPDATE notifications SET is_read = 1 WHERE recipient_id = ?').run(
@@ -1081,20 +1912,24 @@ export function registerSocialRoutes(
         }
       } else {
         const attachedReel = db
-          .prepare('SELECT * FROM reels WHERE media_id = ?')
-          .get(asset.id) as
-          | { id: string; author_id: string; status: string }
+          .prepare('SELECT id, author_id, status, audience FROM reels WHERE media_id = ? OR cover_media_id = ?')
+          .get(asset.id, asset.id) as
+          | { id: string; author_id: string; status: string; audience: string | null }
           | undefined;
         if (attachedReel) {
           const author = db
             .prepare('SELECT status FROM users WHERE id = ?')
             .get(attachedReel.author_id) as { status: UserStatus } | undefined;
           const relations = getViewerRelations(db, viewer?.id || null);
+          const blockedByAudience =
+            attachedReel.audience === 'followers' &&
+            (!viewer || (viewer.id !== attachedReel.author_id && !relations.followingIds.has(attachedReel.author_id)));
           if (
             attachedReel.status !== 'active' ||
             author?.status === 'banned' ||
             relations.blockedIds.has(attachedReel.author_id) ||
-            relations.blockedByIds.has(attachedReel.author_id)
+            relations.blockedByIds.has(attachedReel.author_id) ||
+            blockedByAudience
           ) {
             return reply
               .code(403)
@@ -1110,10 +1945,38 @@ export function registerSocialRoutes(
         }
       }
 
-      reply.header('Content-Type', asset.mime_type);
+      const fullBuf = Buffer.from(asset.data);
+      const totalLen = fullBuf.length;
+      const rangeHeader = request.headers.range;
+
       reply.header('X-Content-Type-Options', 'nosniff');
       reply.header('Cache-Control', 'private, max-age=3600');
-      return reply.send(Buffer.from(asset.data));
+      reply.header('Accept-Ranges', 'bytes');
+
+      if (typeof rangeHeader === 'string' && rangeHeader.startsWith('bytes=')) {
+        const [startRaw, endRaw] = rangeHeader.replace('bytes=', '').split('-');
+        const start = startRaw ? Number.parseInt(startRaw, 10) : 0;
+        const end = endRaw ? Number.parseInt(endRaw, 10) : totalLen - 1;
+        if (
+          Number.isFinite(start) &&
+          Number.isFinite(end) &&
+          start >= 0 &&
+          end < totalLen &&
+          start <= end
+        ) {
+          const chunk = fullBuf.subarray(start, end + 1);
+          reply.code(206);
+          reply.header('Content-Type', asset.mime_type);
+          reply.header('Content-Range', `bytes ${start}-${end}/${totalLen}`);
+          reply.header('Content-Length', chunk.length);
+          return reply.send(chunk);
+        }
+        return reply.code(416).header('Content-Range', `bytes */${totalLen}`).send();
+      }
+
+      reply.header('Content-Type', asset.mime_type);
+      reply.header('Content-Length', totalLen);
+      return reply.send(fullBuf);
     }
   );
 }

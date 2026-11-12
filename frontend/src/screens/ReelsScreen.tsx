@@ -15,6 +15,8 @@ import {
 import { useApp } from '../context/AppContext';
 import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../context/ToastContext';
+import { IS_REAL_BACKEND, apiRequest, resolveApiMediaUrl } from '../services/apiClient';
+import type { ReelCommentItem } from '../types/quad';
 import {
   Avatar,
   Badge,
@@ -61,28 +63,53 @@ function ReelCard({
   const [progress, setProgress] = useState(0);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const bgVideoRef = useRef<HTMLVideoElement | null>(null);
   const lastTapRef = useRef(0);
 
-  const posterSrc = `/media/reel-${reel.posterKey || 'robotics'}-${
-    dark ? 'dark' : 'light'
-  }.svg`;
-  const posterLoaded = loadedSrc === posterSrc;
+  const hasRealVideo = Boolean(reel.videoUrl || reel.mediaUrl);
+  const resolvedVideoSrc = hasRealVideo
+    ? resolveApiMediaUrl(reel.videoUrl || reel.mediaUrl)
+    : '';
+  const resolvedCoverSrc = reel.coverUrl ? resolveApiMediaUrl(reel.coverUrl) : '';
+  const posterSrc =
+    resolvedCoverSrc || `/media/reel-${reel.posterKey || 'robotics'}-${dark ? 'dark' : 'light'}.svg`;
+  const posterLoaded = loadedSrc === posterSrc || hasRealVideo;
   const isPlaying = isInView && !userPaused;
+  const trimStart = Number(reel.trimStart ?? 0);
+  const trimEnd = Number(reel.trimEnd ?? (reel.durationSec || 30));
 
   useEffect(() => {
-    if (imgRef.current && imgRef.current.complete) {
+    if (!hasRealVideo && imgRef.current && imgRef.current.complete) {
       setLoadedSrc(posterSrc);
     }
-  }, [posterSrc]);
+  }, [hasRealVideo, posterSrc]);
 
-  // Simulated video playback progress bar: runs ONLY while >60% visible and not paused
+  // Real <video> playback when uploaded video is present; simulated progress bar for legacy SVG reels
   useEffect(() => {
+    if (hasRealVideo) {
+      const v = videoRef.current;
+      if (!v) return;
+      v.muted = isMuted;
+      if (isPlaying) {
+        if (v.currentTime < trimStart || v.currentTime >= trimEnd) {
+          v.currentTime = trimStart;
+        }
+        v.play().catch(() => {});
+        bgVideoRef.current?.play().catch(() => {});
+      } else {
+        v.pause();
+        bgVideoRef.current?.pause();
+      }
+      return undefined;
+    }
+
     if (!isPlaying) return undefined;
     const interval = setInterval(() => {
       setProgress((prev) => (prev >= 100 ? 0 : prev + 1.25));
     }, 200);
     return () => clearInterval(interval);
-  }, [isPlaying]);
+  }, [hasRealVideo, isMuted, isPlaying, trimEnd, trimStart]);
 
   // Reset progress & pause state when scrolled off-screen
   useEffect(() => {
@@ -138,16 +165,50 @@ function ReelCard({
         {!posterLoaded && (
           <Skeleton variant="rect" className="w-full h-full absolute inset-0" />
         )}
-        <img
-          ref={imgRef}
-          src={posterSrc}
-          alt={reel.posterAlt || `${reel.tag} demonstration reel by @${reel.username}`}
-          onLoad={() => setLoadedSrc(posterSrc)}
-          onError={() => setLoadedSrc(posterSrc)}
-          className={`w-full h-full object-cover ${
-            shouldReduceMotion ? '' : 'transition-opacity duration-250'
-          } ${posterLoaded ? 'opacity-100' : 'opacity-0'}`}
-        />
+        {hasRealVideo ? (
+          <>
+            {reel.fitMode === 'fit' && (
+              <video
+                ref={bgVideoRef}
+                src={resolvedVideoSrc}
+                muted
+                playsInline
+                aria-hidden="true"
+                className="w-full h-full object-cover scale-110 blur-xl opacity-60 absolute inset-0 pointer-events-none"
+              />
+            )}
+            <video
+              ref={videoRef}
+              src={resolvedVideoSrc}
+              poster={resolvedCoverSrc || undefined}
+              muted={isMuted}
+              playsInline
+              loop
+              onTimeUpdate={() => {
+                const v = videoRef.current;
+                if (!v) return;
+                const span = Math.max(1, trimEnd - trimStart);
+                if (v.currentTime < trimStart) v.currentTime = trimStart;
+                else if (trimEnd > trimStart && v.currentTime >= trimEnd) v.currentTime = trimStart;
+                setProgress(Math.min(100, Math.max(0, ((v.currentTime - trimStart) / span) * 100)));
+              }}
+              className={`relative z-10 w-full h-full ${
+                reel.fitMode === 'fit' ? 'object-contain' : 'object-cover'
+              }`}
+            />
+          </>
+        ) : (
+          <img
+            ref={imgRef}
+            src={posterSrc}
+            alt={reel.posterAlt || `${reel.tag} demonstration reel by @${reel.username}`}
+            onLoad={() => setLoadedSrc(posterSrc)}
+            onError={() => setLoadedSrc(posterSrc)}
+            className={`w-full h-full object-cover ${
+              shouldReduceMotion ? '' : 'transition-opacity duration-250'
+            } ${posterLoaded ? 'opacity-100' : 'opacity-0'}`}
+          />
+        )}
 
         {/* Paused Overlay */}
         <AnimatePresence>
@@ -354,6 +415,8 @@ export default function ReelsScreen({
   const [savedMap, setSavedMap] = useState<Record<string | number, boolean>>({});
   const [shareCountMap, setShareCountMap] = useState<Record<string | number, number>>({});
   const [commentReel, setCommentReel] = useState<import('../types/quad').ReelItem | null>(null);
+  const [reelComments, setReelComments] = useState<ReelCommentItem[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentInput, setCommentInput] = useState('');
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -457,16 +520,68 @@ export default function ReelsScreen({
     showToast(`Copied link to @${reel.username}'s reel`, 'success');
   };
 
-  const handlePostComment = (e: React.FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    if (!commentReel) {
+      setReelComments([]);
+      return;
+    }
+    if (!IS_REAL_BACKEND) return;
+    let active = true;
+    setCommentsLoading(true);
+    apiRequest<{ items?: ReelCommentItem[] }>(`/reels/${encodeURIComponent(commentReel.id)}/comments`)
+      .then((res) => {
+        if (active) setReelComments(res?.items || []);
+      })
+      .catch(() => {
+        if (active) setReelComments([]);
+      })
+      .finally(() => {
+        if (active) setCommentsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [commentReel]);
+
+  const handlePostComment = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!commentInput.trim()) return;
-    showToast('Comment posted to reel', 'success');
-    setCommentInput('');
+    if (!commentInput.trim() || !commentReel) return;
+    if (commentReel.commentsEnabled === false) {
+      showToast('Comments are turned off for this reel', 'info');
+      return;
+    }
+    const content = commentInput.trim();
+    if (!IS_REAL_BACKEND) {
+      setReelComments((prev) => [
+        ...prev,
+        {
+          id: `rc_${Date.now()}`,
+          username: state.username || 'quantum_dev',
+          initials: state.userInitials || 'QD',
+          content,
+          timestamp: 'Just now',
+        },
+      ]);
+      showToast('Comment posted to reel', 'success');
+      setCommentInput('');
+      return;
+    }
+    try {
+      const created = await apiRequest<ReelCommentItem>(
+        `/reels/${encodeURIComponent(commentReel.id)}/comments`,
+        { method: 'POST', body: { content } }
+      );
+      setReelComments((prev) => [...prev, created]);
+      setCommentInput('');
+      showToast('Comment posted to reel', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to post comment', 'error');
+    }
   };
 
   if (reels.length === 0) {
     return (
-      <div className="w-full max-w-2xl mx-auto py-12 px-4">
+      <div className="w-full py-12">
         <EmptyState
           icon={Film}
           title="No Campus Reels Yet"
@@ -516,61 +631,63 @@ export default function ReelsScreen({
         variant="sheet"
         isOpen={Boolean(commentReel)}
         onClose={() => setCommentReel(null)}
-        title={`Comments (${commentReel?.comments || 0})`}
+        title={`Comments (${commentReel ? Math.max(commentReel.comments || 0, reelComments.length) : 0})`}
         description={commentReel ? `Discussion on @${commentReel.username}'s demo` : ''}
         size="lg"
       >
         <div className="space-y-4">
           <div className="max-h-[45vh] overflow-y-auto space-y-3 pr-1 text-xs">
-            <div className="flex items-start gap-3 p-3 rounded-[8px] bg-ink/6 border border-ink/12">
-              <Avatar initials="CF" size="sm" />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink">@circuit_freak</p>
-                <p className="text-ink/60 mt-1 leading-relaxed">
-                  Did you test the latency when obstacle reflection is diffuse? What baud rate is the serial port?
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-3 p-3 rounded-[8px] bg-ink/6 border border-ink/12">
-              <Avatar initials="ML" size="sm" />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink">@mech_lead</p>
-                <p className="text-ink/60 mt-1 leading-relaxed">
-                  Awesome chassis rigidity. The damping on the motor mount is holding up well.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-3 p-3 rounded-[8px] bg-ink/6 border border-ink/12">
-              <Avatar initials="QD" size="sm" />
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-ink">@quantum_dev</p>
-                <p className="text-ink/60 mt-1 leading-relaxed">
-                  Great work! Let's integrate with the campus mapping node this Friday.
-                </p>
-              </div>
-            </div>
+            {commentsLoading ? (
+              <p className="text-ink/60 py-4 text-center">Loading comments...</p>
+            ) : reelComments.length === 0 ? (
+              <p className="text-ink/60 py-4 text-center">
+                {commentReel?.commentsEnabled === false
+                  ? 'Comments are turned off for this reel.'
+                  : 'No comments yet. Start the discussion below.'}
+              </p>
+            ) : (
+              reelComments.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-start gap-3 p-3 rounded-[8px] bg-ink/6 border border-ink/12"
+                >
+                  <Avatar initials={c.initials} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-ink">@{c.username}</p>
+                      <span className="text-ink/60">• {c.timestamp}</span>
+                    </div>
+                    <p className="text-ink/80 mt-1 leading-relaxed">{c.content}</p>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
 
-          <form onSubmit={handlePostComment} className="pt-3 border-t border-ink/12 flex items-center gap-2">
-            <input
-              type="text"
-              placeholder="Add a verified campus comment..."
-              value={commentInput}
-              onChange={(e) => setCommentInput(e.target.value)}
-              className="flex-1 min-h-[44px] px-3 py-2 text-xs rounded-[8px] border border-ink/12 bg-canvas text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent"
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              size="md"
-              icon={Send}
-              disabled={!commentInput.trim()}
-            >
-              Post
-            </Button>
-          </form>
+          {commentReel?.commentsEnabled === false ? (
+            <div className="pt-3 border-t border-ink/12 text-center text-xs font-semibold text-ink/60">
+              Comments have been turned off by @{commentReel.username}.
+            </div>
+          ) : (
+            <form onSubmit={handlePostComment} className="pt-3 border-t border-ink/12 flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Add a verified campus comment..."
+                value={commentInput}
+                onChange={(e) => setCommentInput(e.target.value)}
+                className="flex-1 min-h-[44px] px-3 py-2 text-xs rounded-[8px] border border-ink/12 bg-canvas text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent"
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                icon={Send}
+                disabled={!commentInput.trim()}
+              >
+                Post
+              </Button>
+            </form>
+          )}
         </div>
       </Modal>
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useInstitution } from './context/ConfigContext';
@@ -35,7 +35,9 @@ import { QuadLogo } from './components/QuadLogo';
 import { Avatar, Badge, Modal, Spinner } from './components/ui';
 import { SidebarItem } from './components/SidebarItem';
 import { ThisWeekCard } from './components/ThisWeekCard';
+import { PeerProfileModal } from './components/PeerProfileModal';
 import { CreatePostModal } from './screens/CreatePostScreen';
+import CreateReelModal from './components/CreateReelModal';
 
 import {
   Compass,
@@ -268,9 +270,13 @@ function AppShell() {
   const [_history, setHistory] = useState<string[]>(['welcome']);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  const [postMenuOpen, setPostMenuOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreateReelModalOpen, setIsCreateReelModalOpen] = useState(false);
+  const postMenuRef = useRef<HTMLDivElement | null>(null);
   const [selectedWeekItem, setSelectedWeekItem] = useState<ThisWeekEvent | null>(null);
   const [requestedPeerIds, setRequestedPeerIds] = useState<Set<string | number>>(() => new Set());
+  const [selectedProfilePeer, setSelectedProfilePeer] = useState<PeerUser | null>(null);
   const { dark, toggle } = useTheme();
   const { state, markReelsSeen, requestFollow } = useApp();
   const showDevSwitcher =
@@ -284,6 +290,25 @@ function AppShell() {
   const currentUserHasUnseenReel = (state.reels || []).some(
     (r) => r.unseen && r.username === currentUsername
   );
+
+  // Close header + Post dropdown on outside click or Escape
+  useEffect(() => {
+    if (!postMenuOpen) return undefined;
+    const onDown = (e: MouseEvent) => {
+      if (postMenuRef.current && !postMenuRef.current.contains(e.target as Node)) {
+        setPostMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPostMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [postMenuOpen]);
 
   // Listen to browser navigation popstate
   useEffect(() => {
@@ -375,15 +400,38 @@ function AppShell() {
   const CurrentComponent = SCREENS[currentScreen]?.comp || PublicFeedScreen;
   const isAuthScreen = SCREENS[currentScreen]?.isAuth;
 
-  const livePeers = (state.discoverableUsers || []).filter((u) => !u.isFollowing);
-  const spotlightPeers =
-    livePeers.length > 0
-      ? livePeers.slice(0, 3)
-      : [
-          { id: 201, username: 'algo_ninja', initials: 'AN', branch: 'DS', year: '2nd' },
-          { id: 202, username: 'kernel_kid', initials: 'KK', branch: 'IT', year: '2nd' },
-          { id: 203, username: 'debug_queen', initials: 'DQ', branch: 'AI/ML', year: '4th' },
-        ];
+  const spotlightPeers = useMemo(() => {
+    const source = (state.whoToFollow && state.whoToFollow.length > 0
+      ? state.whoToFollow
+      : state.discoverableUsers) || [];
+    const seen = new Set<string>();
+    const followingSet = new Set((state.following || []).map((f) => f.username.toLowerCase()));
+    const blockedSet = new Set((state.blockedUsers || []).map((b) => b.username.toLowerCase()));
+    const incomingReqSet = new Set((state.followRequests || []).map((r) => r.username.toLowerCase()));
+    const selfHandle = currentUsername.toLowerCase();
+
+    return source
+      .filter((u) => {
+        const handle = (u.username || '').toLowerCase();
+        if (!handle || seen.has(handle)) return false;
+        seen.add(handle);
+        if (handle === selfHandle) return false;
+        if (u.directoryVisible === false || u.discoverable === false) return false;
+        if (u.isFollowing || followingSet.has(handle)) return false;
+        if (u.isRequested || requestedPeerIds.has(u.id) || incomingReqSet.has(handle)) return false;
+        if (blockedSet.has(handle)) return false;
+        return true;
+      })
+      .slice(0, 3);
+  }, [
+    state.whoToFollow,
+    state.discoverableUsers,
+    state.following,
+    state.blockedUsers,
+    state.followRequests,
+    currentUsername,
+    requestedPeerIds,
+  ]);
 
   const trendingTopics =
     state.trendingTopics && state.trendingTopics.length > 0
@@ -443,7 +491,7 @@ function AppShell() {
     <div className="min-h-screen bg-canvas text-ink transition-colors duration-250 flex flex-col font-sans antialiased">
       {/* ═══════════ GLOBAL WEB TOPBAR ═══════════ */}
       <header className="sticky top-0 z-40 bg-canvas border-b border-ink/12 px-4 lg:px-8 py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+        <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
           {/* Left Brand Identity: Logo mark + "Quad" wordmark */}
           <div className="flex items-center gap-3">
             <button
@@ -624,14 +672,56 @@ function AppShell() {
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setIsCreateModalOpen(true)}
-                  className="hidden md:inline-flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:brightness-90 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  <Plus size={16} strokeWidth={2.5} aria-hidden="true" />
-                  <span>Post</span>
-                </button>
+                <div className="relative hidden md:block" ref={postMenuRef}>
+                  <button
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={postMenuOpen}
+                    onClick={() => {
+                      setPostMenuOpen((prev) => !prev);
+                      setAvatarMenuOpen(false);
+                      setSwitcherOpen(false);
+                    }}
+                    className="inline-flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:brightness-90 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    <Plus size={16} strokeWidth={2.5} aria-hidden="true" />
+                    <span>Post</span>
+                    <ChevronDown size={14} aria-hidden="true" />
+                  </button>
+
+                  {postMenuOpen && (
+                    <div
+                      role="menu"
+                      aria-label="Create content menu"
+                      className="absolute right-0 mt-2 w-44 bg-canvas rounded-[12px] border border-ink/12 p-1 z-50 shadow-lg space-y-1"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setPostMenuOpen(false);
+                          setIsCreateModalOpen(true);
+                        }}
+                        className="w-full min-h-[40px] px-3 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
+                      >
+                        <PenSquare size={15} />
+                        <span>Post</span>
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setPostMenuOpen(false);
+                          setIsCreateReelModalOpen(true);
+                        }}
+                        className="w-full min-h-[40px] px-3 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Film size={15} />
+                        <span>Reel</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -639,7 +729,7 @@ function AppShell() {
       </header>
 
       {/* ═══════════ MAIN CONTENT BODY ═══════════ */}
-      <div className="flex-1 w-full max-w-7xl mx-auto px-4 lg:px-8 py-6">
+      <div className="flex-1 w-full max-w-[1400px] mx-auto px-4 lg:px-8 py-6">
         {/* If viewing Auth Screens, display centered web layout */}
         {isAuthScreen ? (
           ['welcome', 'signup', 'login', 'forgot_password'].includes(currentScreen) ? (
@@ -687,9 +777,9 @@ function AppShell() {
           </main>
         ) : (
           /* Responsive Web App Layout (>=1280px 3-col, 1024-1279px 2-col, 768-1023px icon-sidebar + feed, <768px 1-col + bottom bar) */
-          <div className="flex gap-6 lg:gap-8 items-start justify-center">
-            {/* ──── COLUMN 1: LEFT NAVIGATION SIDEBAR (768-1023px icon-only, 1024px+ 220px) ──── */}
-            <aside className="hidden md:flex md:w-20 lg:w-[220px] shrink-0 flex-col sticky top-20 self-start max-h-[calc(100dvh-6rem)] overflow-y-auto scrollbar-hover pt-1 pb-6">
+          <div className="quad-shell-grid">
+            {/* ──── COLUMN 1: LEFT NAVIGATION SIDEBAR (768-1023px icon-only, 1024px+ 240px) ──── */}
+            <aside className="hidden md:block w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
               <nav aria-label="Primary campus navigation" className="space-y-1 w-full">
                 <SidebarItem
                   icon={Compass}
@@ -743,58 +833,64 @@ function AppShell() {
               </nav>
             </aside>
 
-            {/* ──── COLUMN 2: CENTER FEED COLUMN (max-w-640px centered) ──── */}
-            <main className="flex-1 min-w-0 max-w-[640px] pb-12 mb-8 md:pb-6 md:mb-0">
-              <CurrentComponent
-                onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
-                onNavigate={navigate}
-                onBack={goBack}
-                onViewWeekItem={setSelectedWeekItem}
-              />
+            {/* ──── COLUMN 2: CENTER FLEXIBLE COLUMN ──── */}
+            <main className="min-w-0 w-full pb-12 mb-8 md:pb-6 md:mb-0">
+              <div className="w-full max-w-[740px] mx-auto">
+                <CurrentComponent
+                  onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
+                  onNavigate={navigate}
+                  onBack={goBack}
+                  onViewWeekItem={setSelectedWeekItem}
+                />
 
-              {/* Single-place Footer when Right Rail is hidden (<1280px) */}
-              <footer className="xl:hidden mt-8 pt-4 border-t border-ink/12 px-2 text-xs text-ink/60 space-y-2">
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={() => navigate('terms')}
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Terms
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => navigate('terms')}
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Privacy
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => navigate('safety')}
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Help
-                  </button>
-                </div>
-                <p className="text-xs text-ink/60">
-                  Quad Web v{APP_VERSION} • Updated Nov 2026
-                </p>
-              </footer>
+                {/* Single-place Footer when Right Rail is hidden (<1100px) */}
+                <footer className="quad-inline-footer mt-8 pt-4 border-t border-ink/12 px-2 text-xs text-ink/60 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => navigate('terms')}
+                      className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      Terms
+                    </button>
+                    <span aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      onClick={() => navigate('terms')}
+                      className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      Privacy
+                    </button>
+                    <span aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      onClick={() => navigate('safety')}
+                      className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      Help
+                    </button>
+                  </div>
+                  <p className="text-xs text-ink/60">
+                    Quad Web v{APP_VERSION} • Updated Nov 2026
+                  </p>
+                </footer>
+              </div>
             </main>
 
-            {/* ──── COLUMN 3: RIGHT CONTEXTUAL RAIL (>=1280px only, 280px) ──── */}
-            <aside className="hidden xl:flex w-[280px] shrink-0 flex-col gap-4 sticky top-20 self-start max-h-[calc(100dvh-6rem)] overflow-y-auto scrollbar-hover pt-1 pb-6">
+            {/* ──── COLUMN 3: RIGHT CONTEXTUAL RAIL (>=1100px only, 340px) ──── */}
+            <aside className="quad-right-rail w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
               {/* This week card */}
-              <ThisWeekCard
-                items={state.thisWeekEvents || []}
-                onViewItem={setSelectedWeekItem}
-              />
+              <div className="shrink-0">
+                <ThisWeekCard
+                  items={state.thisWeekEvents || []}
+                  onViewItem={setSelectedWeekItem}
+                />
+              </div>
 
               {/* Who to follow */}
               <section
                 aria-label="Who to follow"
-                className="p-4 rounded-[12px] bg-canvas border border-ink/12 space-y-3"
+                className="shrink-0 p-4 rounded-[12px] bg-canvas border border-ink/12 space-y-3"
               >
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-ink whitespace-nowrap">
@@ -810,58 +906,68 @@ function AppShell() {
                 </div>
 
                 <div className="space-y-2">
-                  {spotlightPeers.map((peer) => {
-                    const isFollowing = Boolean(peer.isFollowing);
-                    const isRequested = Boolean(peer.isRequested) || requestedPeerIds.has(peer.id);
-                    return (
-                      <div
-                        key={peer.id}
-                        className="flex items-center justify-between gap-2 py-1"
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Avatar
-                            initials={peer.initials}
-                            username={peer.username}
-                            size={36}
-                          />
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold text-ink truncate">
-                              @{peer.username}
-                            </p>
-                            <p className="text-xs text-ink/60 truncate">
-                              {peer.branch} • {peer.year}
-                            </p>
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          disabled={isFollowing || isRequested}
-                          onClick={() => togglePeerRequest(peer)}
-                          aria-pressed={isFollowing || isRequested}
-                          className={`min-h-[44px] px-3 py-2 rounded-[8px] text-xs font-semibold inline-flex items-center gap-1 transition-colors duration-150 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default ${
-                            isFollowing || isRequested
-                              ? 'bg-canvas text-ink border border-ink/12'
-                              : 'bg-ink/8 hover:bg-ink/12 text-ink'
-                          }`}
+                  {spotlightPeers.length === 0 ? (
+                    <p className="text-xs text-ink/60 py-2">
+                      No new suggestions right now.
+                    </p>
+                  ) : (
+                    spotlightPeers.map((peer) => {
+                      const isFollowing = Boolean(peer.isFollowing);
+                      const isRequested = Boolean(peer.isRequested) || requestedPeerIds.has(peer.id);
+                      return (
+                        <div
+                          key={peer.id}
+                          className="flex items-center justify-between gap-2 py-1 rounded-[8px] hover:bg-ink/6 px-1 transition-colors"
                         >
-                          {(isFollowing || isRequested) && (
-                            <Check size={14} className="text-ink shrink-0" />
-                          )}
-                          <span>
-                            {isFollowing ? 'Following' : isRequested ? 'Requested' : 'Follow'}
-                          </span>
-                        </button>
-                      </div>
-                    );
-                  })}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedProfilePeer(peer)}
+                            className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-[8px]"
+                          >
+                            <Avatar
+                              initials={peer.initials}
+                              username={peer.username}
+                              size={36}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-ink truncate">
+                                @{peer.username}
+                              </p>
+                              <p className="text-xs text-ink/60 truncate">
+                                {[peer.branch, peer.year].filter(Boolean).join(' • ')}
+                              </p>
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isFollowing || isRequested}
+                            onClick={() => togglePeerRequest(peer)}
+                            aria-pressed={isFollowing || isRequested}
+                            className={`min-h-[44px] px-3 py-2 rounded-[8px] text-xs font-semibold inline-flex items-center gap-1 transition-colors duration-150 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default ${
+                              isFollowing || isRequested
+                                ? 'bg-canvas text-ink border border-ink/12'
+                                : 'bg-ink/8 hover:bg-ink/12 text-ink'
+                            }`}
+                          >
+                            {(isFollowing || isRequested) && (
+                              <Check size={14} className="text-ink shrink-0" />
+                            )}
+                            <span>
+                              {isFollowing ? 'Following' : isRequested ? 'Requested' : 'Follow'}
+                            </span>
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </section>
 
               {/* Campus discussions */}
               <section
                 aria-label="Campus discussions"
-                className="p-4 rounded-[12px] bg-canvas border border-ink/12 space-y-2"
+                className="shrink-0 p-4 rounded-[12px] bg-canvas border border-ink/12 space-y-2"
               >
                 <div className="flex items-center gap-2">
                   <Sparkles size={16} className="text-ink shrink-0" aria-hidden="true" />
@@ -897,27 +1003,29 @@ function AppShell() {
                 </div>
               </section>
 
-              {/* Footer: Terms, Privacy, Help (one place only) */}
-              <footer className="px-2 text-xs text-ink/60 space-y-2">
-                <div className="flex flex-wrap gap-3">
+              {/* Footer: Terms, Privacy, Help (normal flow at bottom of right column) */}
+              <footer className="shrink-0 pt-2 border-t border-ink/12 px-2 text-xs text-ink/60 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => navigate('terms')}
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     Terms
                   </button>
+                  <span aria-hidden="true">·</span>
                   <button
                     type="button"
                     onClick={() => navigate('terms')}
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     Privacy
                   </button>
+                  <span aria-hidden="true">·</span>
                   <button
                     type="button"
                     onClick={() => navigate('safety')}
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     Help
                   </button>
@@ -1039,12 +1147,28 @@ function AppShell() {
         )}
       </Modal>
 
+      {/* Who to Follow Peer Profile Modal */}
+      <PeerProfileModal
+        username={selectedProfilePeer?.username || null}
+        fallbackPeer={selectedProfilePeer}
+        onClose={() => setSelectedProfilePeer(null)}
+      />
+
       {/* Global Create Post Modal */}
       <CreatePostModal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onCreated={() => {
           if (currentScreen !== 'feed') navigate('feed');
+        }}
+      />
+
+      {/* Global Create Reel Modal */}
+      <CreateReelModal
+        isOpen={isCreateReelModalOpen}
+        onClose={() => setIsCreateReelModalOpen(false)}
+        onCreated={() => {
+          navigate('reels');
         }}
       />
     </div>

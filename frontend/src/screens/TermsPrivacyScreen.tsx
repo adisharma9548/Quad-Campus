@@ -35,7 +35,7 @@ export default function TermsPrivacyScreen({
   const [activeTab, setActiveTab] = useState('all');
 
   return (
-    <div className={embedded ? 'w-full space-y-6' : 'w-full max-w-3xl mx-auto py-6 px-4 space-y-6'}>
+    <div className="w-full space-y-6">
       {!embedded && (
         <div className="flex items-start justify-between gap-4 pb-2 border-b border-ink/12">
           <div>

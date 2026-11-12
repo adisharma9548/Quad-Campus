@@ -11,9 +11,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Local Secrets & SQLite Runtime Data
+# Local Secrets & SQLite Runtime Data & Uploads
 backend/.env
 backend/data/
+backend/uploads/
+uploads/
+backups/
 *.db
 *.db-shm
 *.db-wal

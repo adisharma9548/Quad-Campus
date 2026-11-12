@@ -381,15 +381,41 @@ export function rankDiscoverablePeers({
   const viewerInterests = Array.isArray(viewer?.interests) ? viewer.interests : [];
   const scored: RankedPeerItem[] = [];
 
+  const branchSet =
+    branchFilter && branchFilter !== 'all'
+      ? new Set(
+          branchFilter
+            .split(',')
+            .map((b) => b.trim().toLowerCase())
+            .filter(Boolean)
+        )
+      : null;
+  const yearSet =
+    yearFilter && yearFilter !== 'all'
+      ? new Set(
+          yearFilter
+            .split(',')
+            .map((y) => SHORT_YEAR(y.trim()).toLowerCase())
+            .filter(Boolean)
+        )
+      : null;
+
   for (const peer of candidates) {
     if (peer.role !== 'student' || peer.status !== 'active') continue;
     if (viewer && peer.id === viewer.id) continue;
     if (!peer.discoverable) continue;
     if (relations.blockedIds.has(peer.id) || relations.blockedByIds.has(peer.id)) continue;
+    if (relations.followingIds.has(peer.id)) continue;
+    if (
+      relations.outgoingRequestTargetIds.has(peer.id) ||
+      relations.incomingRequestRequesterIds?.has(peer.id)
+    ) {
+      continue;
+    }
 
     const peerYearShort = SHORT_YEAR(peer.year);
-    if (branchFilter !== 'all' && peer.branch !== branchFilter) continue;
-    if (yearFilter !== 'all' && peerYearShort !== yearFilter) continue;
+    if (branchSet && !branchSet.has((peer.branch || '').toLowerCase())) continue;
+    if (yearSet && !yearSet.has(peerYearShort.toLowerCase())) continue;
 
     if (cleanQuery) {
       const text = `${peer.username} ${peer.bio || ''} ${peer.branch} ${peerYearShort} ${(peer.interests || []).join(' ')}`.toLowerCase();
@@ -404,11 +430,8 @@ export function rankDiscoverablePeers({
     );
     const sameBranchScore = viewer?.branch && peer.branch === viewer.branch ? 0.45 : 0;
     const sameYearScore = viewer?.year && peerYearShort === SHORT_YEAR(viewer.year) ? 0.3 : 0;
-    const alreadyFollowingPenalty = relations.followingIds.has(peer.id) ? 0.35 : 1.0;
 
-    const score =
-      (1.0 + sharedInterestScore * 3.0 + sameBranchScore + sameYearScore) *
-      alreadyFollowingPenalty;
+    const score = 1.0 + sharedInterestScore * 3.0 + sameBranchScore + sameYearScore;
     scored.push({
       id: peer.id,
       username: peer.username,
@@ -416,8 +439,8 @@ export function rankDiscoverablePeers({
       branch: peer.branch,
       year: peerYearShort,
       bio: peer.bio || '',
-      isFollowing: relations.followingIds.has(peer.id),
-      isRequested: relations.outgoingRequestTargetIds.has(peer.id),
+      isFollowing: false,
+      isRequested: false,
       score,
     });
   }
@@ -439,7 +462,9 @@ export type RankableReel = Pick<
   | 'caption'
   | 'tag'
   | 'createdAtMs'
->;
+> & {
+  audience?: 'campus' | 'followers' | string;
+};
 
 export interface RankReelsOptions<T extends RankableReel> {
   reels: T[];
@@ -465,6 +490,12 @@ export function rankCampusReels<T extends RankableReel>({
       continue;
     }
     if (relations.mutedIds.has(reel.authorId)) continue;
+    if (reel.audience === 'followers') {
+      if (!viewer) continue;
+      if (viewer.id !== reel.authorId && !relations.followingIds.has(reel.authorId)) {
+        continue;
+      }
+    }
 
     const ageHours = Math.max(0, (now - reel.createdAtMs) / HOUR_MS);
     const recency = 1 / Math.pow(1 + ageHours / 12, 1.25);

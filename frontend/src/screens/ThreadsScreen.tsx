@@ -11,18 +11,37 @@ import {
 import { useApp } from '../context/AppContext';
 import { useToast } from '../context/ToastContext';
 import { Avatar, PrivacyBadge, Card, Button, EmptyState } from '../components/ui';
+import ThreadCommentNode from '../components/ThreadCommentNode';
+import ReportModal from '../components/ReportModal';
+import type { ThreadReply } from '../types/quad';
 
 export default function ThreadsScreen({
   onNavigate: _onNavigate,
 }: {
   onNavigate?: (screen: string) => void;
 }) {
-  const { state, createThread, toggleThreadLike, addThreadReply } = useApp();
+  const {
+    state,
+    createThread,
+    toggleThreadLike,
+    addThreadReply,
+    loadMoreThreadReplies,
+    loadMoreThreads,
+    deleteThreadReply,
+    reportThreadComment,
+    undoThreadCommentReport,
+  } = useApp();
   const { showToast } = useToast();
   const threadPosts = state.threadPosts || [];
   const [newThreadText, setNewThreadText] = useState('');
   const [activeReplyPostId, setActiveReplyPostId] = useState<string | number | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [highlightedCommentId, setHighlightedCommentId] = useState<string | null>(null);
+  const [loadingMoreThreads, setLoadingMoreThreads] = useState(false);
+  const [reportTarget, setReportTarget] = useState<{
+    threadId: string | number;
+    comment: ThreadReply;
+  } | null>(null);
 
   const toggleLike = async (id: string | number) => {
     await toggleThreadLike(id);
@@ -40,20 +59,121 @@ export default function ThreadsScreen({
     }
   };
 
-  const handleAddReply = async (postId: string | number) => {
-    if (!replyText.trim()) return;
+  const handleAddTopLevelReply = async (postId: string | number) => {
+    const trimmed = replyText.trim();
+    if (!trimmed) return;
+    setReplyText('');
+    setActiveReplyPostId(null);
     try {
-      await addThreadReply(postId, replyText.trim());
-      setReplyText('');
-      setActiveReplyPostId(null);
+      await addThreadReply(postId, trimmed, { parentCommentId: null });
       showToast('Reply added cleanly', 'success');
     } catch (err) {
+      setReplyText(trimmed);
+      setActiveReplyPostId(postId);
       showToast(err instanceof Error ? err.message : 'Unable to post reply', 'error');
     }
   };
 
+  const handleNestedReplySubmit = async (
+    threadId: string | number,
+    parentCommentId: string | number,
+    replyToUsername: string,
+    text: string
+  ) => {
+    try {
+      await addThreadReply(threadId, text, { parentCommentId, replyToUsername });
+      showToast(`Replied to @${replyToUsername}`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to post reply', 'error');
+      throw err;
+    }
+  };
+
+  const handleDeleteComment = async (threadId: string | number, replyId: string | number) => {
+    try {
+      await deleteThreadReply(threadId, replyId);
+      showToast('Comment removed', 'info');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not delete comment', 'error');
+    }
+  };
+
+  const handleLoadMoreBranch = async (
+    threadId: string | number,
+    parentCommentId: string | number
+  ) => {
+    try {
+      await loadMoreThreadReplies(threadId, parentCommentId);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to load replies', 'error');
+    }
+  };
+
+  const handleJumpToComment = (targetId: string | number) => {
+    const idStr = String(targetId);
+    const el = document.getElementById(`thread-comment-${idStr}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedCommentId(idStr);
+      window.setTimeout(() => {
+        setHighlightedCommentId((curr) => (curr === idStr ? null : curr));
+      }, 2000);
+    } else {
+      showToast('Parent comment is outside the current view', 'info');
+    }
+  };
+
+  const handleLoadMoreThreads = async () => {
+    if (loadingMoreThreads) return;
+    setLoadingMoreThreads(true);
+    try {
+      await loadMoreThreads();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not load more discussions', 'error');
+    } finally {
+      setLoadingMoreThreads(false);
+    }
+  };
+
+  const handleOpenReportComment = (threadId: string | number, comment: ThreadReply) => {
+    if (comment.reportedByMe) {
+      showToast('You already reported this', 'info');
+      return;
+    }
+    setReportTarget({ threadId, comment });
+  };
+
+  const handleConfirmReport = async (reason: string, details: string) => {
+    if (!reportTarget) return;
+    try {
+      const outcome = await reportThreadComment(
+        reportTarget.threadId,
+        reportTarget.comment,
+        reason,
+        details
+      );
+      setReportTarget(null);
+      if (outcome === 'already_reported') {
+        showToast('You already reported this', 'info');
+      } else {
+        showToast('Confidential report submitted to campus moderation', 'info');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to submit report', 'error');
+    }
+  };
+
+  const handleUndoReport = async (threadId: string | number, comment: ThreadReply) => {
+    try {
+      await undoThreadCommentReport(threadId, comment.id);
+      showToast('Report withdrawn and comment restored', 'info');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to undo report', 'error');
+    }
+  };
+
   return (
-    <div className="w-full max-w-2xl mx-auto py-6 px-4 space-y-6">
+    <div className="w-full space-y-6">
       {/* Thread Composer Card */}
       <Card className="p-4 sm:p-6 bg-canvas border border-ink/12 rounded-[16px]">
         <form onSubmit={handlePostThread} className="space-y-4">
@@ -72,15 +192,11 @@ export default function ThreadsScreen({
                 onChange={(e) => setNewThreadText(e.target.value)}
                 placeholder="Start a campus discussion or direct peer inquiry..."
                 aria-label="New thread message"
-                className="w-full resize-none bg-transparent text-sm text-ink placeholder:text-ink/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-[8px] p-1"
+                className="w-full px-3 py-2 rounded-[10px] text-sm bg-canvas border border-ink/12 text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent resize-y"
               />
             </div>
           </div>
-
-          <div className="flex items-center justify-between pt-3 border-t border-ink/12 gap-3 flex-wrap">
-            <span className="text-xs text-ink/60">
-              Plain text discussions • No real names exposed
-            </span>
+          <div className="flex justify-end">
             <Button
               type="submit"
               variant="primary"
@@ -131,7 +247,7 @@ export default function ThreadsScreen({
                   <button
                     type="button"
                     aria-label={`Thread options for @${post.username}`}
-                    onClick={() => showToast('Thread reporting & mute options via Feed', 'info')}
+                    onClick={() => showToast('Use the ⋯ menu on any comment or reply to report', 'info')}
                     className="min-h-[44px] min-w-[44px] p-2 rounded-[8px] text-ink/60 hover:text-ink hover:bg-ink/8 active:bg-ink/12 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <MoreHorizontal size={20} />
@@ -145,7 +261,6 @@ export default function ThreadsScreen({
 
                 {/* Action Bar */}
                 <div className="flex items-center gap-2 sm:gap-4 pl-0 sm:pl-12 pt-1 text-xs text-ink/60 flex-wrap">
-                  {/* Like Heart: NOT red per spec -> filled Ink heart */}
                   <button
                     type="button"
                     onClick={() => toggleLike(post.id)}
@@ -160,16 +275,16 @@ export default function ThreadsScreen({
 
                   <button
                     type="button"
-                    onClick={() =>
-                      setActiveReplyPostId(
-                        activeReplyPostId === post.id ? null : post.id
-                      )
-                    }
+                    onClick={() => {
+                      const nextOpen = activeReplyPostId === post.id ? null : post.id;
+                      setActiveReplyPostId(nextOpen);
+                      setReplyText(nextOpen ? `@${post.username} ` : '');
+                    }}
                     aria-label={`${post.replyCount || (post.replies?.length || 0)} replies, reply to @${post.username}`}
                     className="min-h-[44px] px-3 py-2 rounded-[8px] flex items-center gap-2 hover:text-ink hover:bg-ink/4 transition-colors cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <MessageSquare size={16} />
-                    <span>{post.replyCount || (post.replies?.length || 0)} replies</span>
+                    <span>{post.replyCount ?? (post.replies?.length || 0)} replies</span>
                   </button>
 
                   <button
@@ -182,70 +297,109 @@ export default function ThreadsScreen({
                   </button>
                 </div>
 
-                {/* Replies Thread Section */}
-                {post.replies && post.replies.length > 0 && (
-                  <div className="pl-4 sm:pl-12 pt-3 space-y-3 relative">
-                    {/* Subtle vertical connector thread line */}
-                    <div className="absolute left-2 sm:left-6 top-0 bottom-4 w-0.5 bg-ink/12" />
-
-                    {post.replies.map((reply) => (
-                      <div
-                        key={reply.id}
-                        className="relative flex items-start gap-3 bg-ink/6 p-3 rounded-[8px] border border-ink/12"
-                      >
-                        <Avatar initials={reply.initials} size="sm" />
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-bold text-ink truncate">
-                              @{reply.username}
-                            </span>
-                            <span className="text-xs text-ink/60">
-                              • {reply.timestamp}
-                            </span>
-                          </div>
-                          <p className="text-xs text-ink leading-relaxed break-words">
-                            {reply.content}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Inline Reply Input if activated */}
+                {/* Inline Reply Input to Thread */}
                 {activeReplyPostId === post.id && (
                   <div className="pl-0 sm:pl-12 pt-2">
                     <form
                       onSubmit={(e) => {
                         e.preventDefault();
-                        handleAddReply(post.id);
+                        handleAddTopLevelReply(post.id);
                       }}
-                      className="flex items-center gap-2"
+                      className="space-y-2"
                     >
-                      <input
-                        type="text"
+                      <textarea
+                        rows={2}
+                        maxLength={2000}
                         value={replyText}
                         onChange={(e) => setReplyText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                            e.preventDefault();
+                            handleAddTopLevelReply(post.id);
+                          }
+                        }}
                         placeholder={`Reply to @${post.username}...`}
                         aria-label={`Reply input for @${post.username}`}
-                        className="flex-1 min-h-[44px] px-3 py-2 rounded-[8px] text-xs bg-canvas border border-ink/12 text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent"
+                        className="w-full px-3 py-2 rounded-[8px] text-xs bg-canvas border border-ink/12 text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent resize-y"
                       />
-                      <Button
-                        type="submit"
-                        variant="primary"
-                        size="md"
-                        disabled={!replyText.trim()}
-                      >
-                        Reply
-                      </Button>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-ink/60">Ctrl+Enter to submit</span>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                              setActiveReplyPostId(null);
+                              setReplyText('');
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            type="submit"
+                            variant="primary"
+                            size="sm"
+                            disabled={!replyText.trim()}
+                          >
+                            Submit
+                          </Button>
+                        </div>
+                      </div>
                     </form>
+                  </div>
+                )}
+
+                {/* Nested Comments Tree */}
+                {post.replies && post.replies.length > 0 && (
+                  <div className="pl-2 sm:pl-12 pt-2 space-y-3">
+                    {post.replies.map((reply) => (
+                      <ThreadCommentNode
+                        key={reply.id}
+                        threadId={post.id}
+                        node={reply}
+                        depth={0}
+                        currentUsername={state.username}
+                        highlightedId={highlightedCommentId}
+                        onJumpToComment={handleJumpToComment}
+                        onReplySubmit={handleNestedReplySubmit}
+                        onDeleteComment={handleDeleteComment}
+                        onLoadMoreReplies={handleLoadMoreBranch}
+                        onReportComment={handleOpenReportComment}
+                        onUndoReport={handleUndoReport}
+                      />
+                    ))}
                   </div>
                 )}
               </Card>
             );
           })}
+
+          {state.threadsHasMore && (
+            <div className="flex justify-center pt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                onClick={handleLoadMoreThreads}
+                disabled={loadingMoreThreads}
+              >
+                {loadingMoreThreads ? 'Loading discussions...' : 'Load more discussions'}
+              </Button>
+            </div>
+          )}
         </div>
       )}
+
+      <ReportModal
+        isOpen={Boolean(reportTarget)}
+        targetLabel={
+          reportTarget ? `Comment by @${reportTarget.comment.username}` : undefined
+        }
+        snippet={reportTarget?.comment.content}
+        onClose={() => setReportTarget(null)}
+        onConfirm={handleConfirmReport}
+      />
     </div>
   );
 }
