@@ -2,6 +2,7 @@ import React, { type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { Lock, ShieldCheck, GraduationCap } from 'lucide-react';
 import { QuadLogo } from './QuadLogo';
+import { useInstitution } from '../context/ConfigContext';
 
 export interface AuthSplitLayoutProps {
   children: ReactNode;
@@ -20,6 +21,7 @@ export function AuthSplitLayout({
   compactMobileHeader = false,
   footer = null,
 }: AuthSplitLayoutProps) {
+  const institution = useInstitution();
   return (
     <div className="w-full max-w-5xl mx-auto min-h-[calc(100dvh-140px)] flex flex-col justify-center py-4 sm:py-8 px-2 sm:px-4 select-none">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center w-full">
@@ -35,7 +37,7 @@ export function AuthSplitLayout({
           {/* Network Micro Badge */}
           <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-ink/6 border border-ink/12 text-xs font-semibold text-ink">
             <GraduationCap size={16} className="text-accent shrink-0" />
-            <span>Engineering Campus Network</span>
+            <span>{institution.networkLabel}</span>
           </span>
 
           {/* Brand Identity */}

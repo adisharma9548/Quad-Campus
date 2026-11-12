@@ -14,6 +14,11 @@ import { useToast } from '../../context/ToastContext';
 import { Button, TextField, Card } from '../../components/ui';
 import { AuthSplitLayout } from '../../components/AuthSplitLayout';
 
+// Demo credentials are visible only in offline mock mode, or when a sales-demo build sets
+// VITE_SHOW_DEMO_CREDENTIALS=true. Real-backend production builds never show them.
+const SHOW_DEMO_CREDENTIALS: boolean =
+  !__AUTH_REAL__ || import.meta.env.VITE_SHOW_DEMO_CREDENTIALS === 'true';
+
 export default function LoginScreen({
   onNavigate,
 }: {
@@ -135,7 +140,7 @@ export default function LoginScreen({
             label="Campus Handle or Verified College Email"
             id="loginIdentifier"
             name="identifier"
-            placeholder="e.g. quantum_dev or aarav@btech.college.edu.in"
+            placeholder="Username or email"
             icon={User}
             value={identifier}
             onChange={(e) => {
@@ -227,7 +232,8 @@ export default function LoginScreen({
           </div>
         </form>
 
-        {/* Demo Fast Login Callout */}
+        {/* Demo Fast Login Callout: shown only in offline demo mode or when explicitly enabled */}
+        {SHOW_DEMO_CREDENTIALS && (
         <div className="p-3 rounded-[8px] bg-ink/6 border border-ink/12 text-xs space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="font-bold text-ink flex items-center gap-2">
@@ -247,6 +253,7 @@ export default function LoginScreen({
             <code className="font-mono text-ink font-semibold">Campus@2026</code>
           </p>
         </div>
+        )}
       </Card>
     </AuthSplitLayout>
   );

@@ -1,8 +1,10 @@
-# Quad — Campus, on your terms (`v2.6.0`)
+# Quad — Campus, on your terms (`v2.7.0`)
 
-A privacy-first, non-addictive B.Tech campus social network split cleanly into `frontend/` (TypeScript + React 19 + Vite + Tailwind + Capacitor Android) and `backend/` (TypeScript + Fastify v5 + Node.js `node:sqlite`).
+A privacy-first, non-addictive B.Tech campus social network split cleanly into `frontend/` (TypeScript + React 19 + Vite + Tailwind) and `backend/` (TypeScript + Fastify v5 + Node.js `node:sqlite`).
 
-> **v2.6.0 Update**: Converted the entire `backend/` and `frontend/` codebase to strict TypeScript (`.ts` / `.tsx`) with typechecking via `tsc --noEmit` and Node v24 native `.ts` execution, and added Capacitor Android support (`com.quadcampus.app`) to produce standalone mobile `.apk` builds (`Quad-v2.6.0.apk`).
+> **v2.7.0 Update**: Production-readiness release: white-label institution profile (presets, JSON override, open/allowlist/edu email policies), safer secrets and seeding, edit/delete own posts, search, notification bell, WCAG 2.1 AA colors and labels, self-hosted fonts, and global scrollbar-hidden UI. See [CHANGELOG.md](./CHANGELOG.md), [DEPLOYMENT.md](./DEPLOYMENT.md), and **[KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) (read before selling)**.
+>
+> **v2.6.0 Update**: Converted the entire `backend/` and `frontend/` codebase to strict TypeScript (`.ts` / `.tsx`) with typechecking via `tsc --noEmit` and Node v24 native `.ts` execution.
 > **v2.5.0 Update**: Fixed unauthenticated and mid-registration Terms & Conditions / Privacy Policy navigation so viewing legal documents renders in an isolated guest layout / in-flow modal without redirecting to the main Feed or losing sign-up progress; added strict Proprietary License (`LICENSE`).
 
 ## Workspace Layout
@@ -18,8 +20,7 @@ brainrot/
 │   │   ├── routes/           # auth.ts, feed.ts, social.ts, admin.ts endpoints under /api/v1
 │   │   └── utils/            # Scrypt password hashing (crypto.ts), EXIF/XMP/comment scrubber (exifStripper.ts)
 │   └── tests/                # Unit + HTTP integration suite (api.test.ts via node --test)
-└── frontend/                 # TypeScript + React 19 + Vite + 4-token Tailwind design system + Capacitor Android
-    ├── android/              # Native Capacitor Android project (com.quadcampus.app)
+└── frontend/                 # TypeScript + React 19 + Vite + 4-token Tailwind design system
     ├── public/               # SVG + PNG favicons, Apple touch icon, PWA icons & manifest
     └── src/
         ├── components/       # Shared UI primitives, QuadLogo, PostCard, ErrorBoundary
@@ -73,18 +74,6 @@ npm run typecheck
 npm run lint
 node scripts/lint-tokens.ts
 npm run build
-```
-
-### 3. Build the Android Mobile APK (`Quad-v2.6.0.apk`)
-
-Mobile builds use `frontend/.env.mobile` (`VITE_AUTH_MODE=mock`) so the APK runs standalone on Android devices without requiring a local backend tunnel:
-
-```powershell
-cd frontend
-npm run build:mobile
-npx cap sync android
-cd android
-.\gradlew.bat assembleDebug
 ```
 
 ## Architecture Highlights

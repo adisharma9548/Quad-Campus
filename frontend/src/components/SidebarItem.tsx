@@ -24,7 +24,6 @@ export function SidebarItem({
       type="button"
       onClick={onClick}
       title={label}
-      aria-label={label}
       aria-current={active ? 'page' : undefined}
       className={`w-full min-h-[44px] flex items-center justify-center lg:justify-between px-3 py-2 rounded-full text-sm font-medium transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
         active
@@ -42,7 +41,7 @@ export function SidebarItem({
             aria-hidden="true"
           />
         )}
-        <span className="hidden lg:inline truncate">{label}</span>
+        <span className="max-lg:sr-only lg:inline truncate">{label}</span>
       </div>
 
       {badge && (

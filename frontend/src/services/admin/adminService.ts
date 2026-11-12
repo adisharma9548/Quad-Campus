@@ -6,7 +6,7 @@
  * When VITE_AUTH_MODE=mock, falls back to localStorage mock storage.
  */
 
-import { IS_REAL_BACKEND, apiRequest } from '../apiClient';
+import { apiRequest } from '../apiClient';
 import type {
   AdminMetrics,
   AdminPostItem,
@@ -263,7 +263,7 @@ class AdminService {
   }
 
   async getAuditLogs(): Promise<AuditLogEntry[]> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<AuditLogEntry[]>('/admin/audit-logs', { method: 'GET' });
     }
     return this._getLocalAuditLogs();
@@ -271,7 +271,7 @@ class AdminService {
 
   // --- Dashboard Metrics ---
   async getDashboardMetrics(): Promise<AdminMetrics> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<AdminMetrics>('/admin/metrics', { method: 'GET' });
     }
     const users = this._getUsers();
@@ -296,7 +296,7 @@ class AdminService {
 
   // --- User Management ---
   async getUsers(searchQuery = '', statusFilter = 'all'): Promise<AdminManagedUser[]> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       const params = new URLSearchParams();
       if (searchQuery) params.set('q', searchQuery);
       if (statusFilter) params.set('status', statusFilter);
@@ -331,7 +331,7 @@ class AdminService {
     reason = '',
     adminIdentifier = 'admin'
   ): Promise<AdminManagedUser> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<AdminManagedUser>(
         `/admin/users/${encodeURIComponent(userId)}/suspend`,
         {
@@ -369,7 +369,7 @@ class AdminService {
     reason = '',
     adminIdentifier = 'admin'
   ): Promise<AdminManagedUser> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<AdminManagedUser>(
         `/admin/users/${encodeURIComponent(userId)}/ban`,
         {
@@ -405,7 +405,7 @@ class AdminService {
     userId: string,
     adminIdentifier = 'admin'
   ): Promise<AdminManagedUser> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<AdminManagedUser>(
         `/admin/users/${encodeURIComponent(userId)}/reactivate`,
         {
@@ -440,7 +440,7 @@ class AdminService {
 
   // --- Reports Queue ---
   async getReportsQueue(): Promise<MutableAdminReport[]> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<MutableAdminReport[]>('/admin/reports', { method: 'GET' });
     }
     return this._getReports();
@@ -450,7 +450,7 @@ class AdminService {
     reportId: string,
     adminIdentifier = 'admin'
   ): Promise<MutableAdminReport> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<MutableAdminReport>(
         `/admin/reports/${encodeURIComponent(reportId)}/dismiss`,
         {
@@ -482,7 +482,7 @@ class AdminService {
     reason = '',
     adminIdentifier = 'admin'
   ): Promise<MutableAdminReport> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<MutableAdminReport>(
         `/admin/reports/${encodeURIComponent(reportId)}/remove`,
         {
@@ -525,7 +525,7 @@ class AdminService {
 
   // --- Posts Moderation ---
   async getPostsList(): Promise<MutableAdminPost[]> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<MutableAdminPost[]>('/admin/posts', { method: 'GET' });
     }
     return this._getPosts();
@@ -536,7 +536,7 @@ class AdminService {
     reason = '',
     adminIdentifier = 'admin'
   ): Promise<MutableAdminPost> {
-    if (IS_REAL_BACKEND) {
+    if (__AUTH_REAL__) {
       return apiRequest<MutableAdminPost>(
         `/admin/posts/${encodeURIComponent(postId)}`,
         {

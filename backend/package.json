@@ -1,6 +1,6 @@
 {
   "name": "quad-backend",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "private": true,
   "license": "UNLICENSED",
   "description": "Quad Campus Fastify + SQLite Backend (TypeScript)",

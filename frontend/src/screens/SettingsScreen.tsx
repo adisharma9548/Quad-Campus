@@ -25,6 +25,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { useInstitution } from '../context/ConfigContext';
 import {
   Card,
   Toggle,
@@ -47,6 +48,7 @@ export default function SettingsScreen({
     toggleDiscoverability,
     updatePrivacySetting,
   } = useApp();
+  const institution = useInstitution();
   const { user, logOut, exportMyData, deleteAccount } = useAuth();
   const { showToast } = useToast();
 
@@ -277,7 +279,7 @@ export default function SettingsScreen({
             <button
               type="button"
               onClick={() => setShowReportConfirm(true)}
-              className="min-h-[44px] px-4 py-2 rounded-[8px] bg-ink/8 hover:bg-ink/12 text-danger text-xs font-semibold inline-flex items-center gap-2 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="min-h-[44px] px-4 py-2 rounded-[8px] bg-canvas border border-ink/12 hover:bg-ink/6 text-danger text-xs font-semibold inline-flex items-center gap-2 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               <Flag size={16} />
               <span>Report a concern</span>
@@ -327,7 +329,7 @@ export default function SettingsScreen({
       <div className="space-y-2">
         <div className="flex items-center justify-between px-1">
           <p className="text-xs font-bold uppercase tracking-wider text-ink/60">
-            Verified College Network
+            {institution.networkLabel}
           </p>
           <span className="inline-flex items-center gap-2 text-xs font-semibold text-ink bg-ink/6 px-3 py-1 rounded-full border border-ink/12">
             <Lock size={14} />
@@ -340,11 +342,11 @@ export default function SettingsScreen({
             <div className="min-w-0">
               <span className="text-ink/60 block text-xs">College Email</span>
               <span className="font-sans font-semibold text-ink truncate block">
-                {user?.email || 'aarav.patel@btech.college.edu.in'}
+                {user?.email || ''}
               </span>
             </div>
             <span className="text-xs font-semibold text-ink bg-ink/6 px-3 py-1 rounded-full border border-ink/12 shrink-0">
-              Verified College Network
+              {institution.networkLabel}
             </span>
           </div>
 
@@ -419,7 +421,7 @@ export default function SettingsScreen({
             <button
               type="button"
               onClick={() => setShowDeleteConfirm(true)}
-              className="min-h-[44px] px-4 py-2 rounded-[8px] bg-ink/6 hover:bg-ink/12 text-danger text-xs font-semibold inline-flex items-center justify-center gap-2 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="min-h-[44px] px-4 py-2 rounded-[8px] bg-canvas border border-ink/12 hover:bg-ink/6 text-danger text-xs font-semibold inline-flex items-center justify-center gap-2 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               <Trash2 size={16} />
               <span>Delete Account Permanently</span>
@@ -434,7 +436,7 @@ export default function SettingsScreen({
           <QuadLogo size={28} />
         </div>
         <p className="font-semibold text-ink">
-          Quad Platform (B.Tech Campus Edition)
+          {institution.appName} Platform
         </p>
         <p className="text-xs text-ink/60">
           Privacy-first social architecture for engineering universities

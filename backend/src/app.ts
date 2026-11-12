@@ -2,7 +2,17 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import type { DatabaseSync } from 'node:sqlite';
-import { DB_PATH, FRONTEND_ORIGIN, SECURITY_LIMITS } from './config/constants.ts';
+import {
+  DB_PATH,
+  FRONTEND_ORIGIN,
+  INSTITUTION,
+  IS_PRODUCTION,
+  SECURITY_LIMITS,
+  SEED_ADMIN_PASSWORD,
+  SEED_ADMIN_PASSWORD_GENERATED,
+  ADMIN_USERNAME,
+} from './config/constants.ts';
+import { publicInstitutionConfig } from './config/institution.ts';
 import { openDatabase } from './db/database.ts';
 import { seedDatabase } from './db/seed.ts';
 import { createAuthMiddleware } from './middleware/auth.ts';
@@ -36,9 +46,6 @@ export async function buildApp({
       'http://127.0.0.1:5173',
       'http://localhost:4173',
       'http://127.0.0.1:4173',
-      'capacitor://localhost',
-      'http://localhost',
-      'https://localhost',
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
@@ -51,8 +58,27 @@ export async function buildApp({
     },
   });
 
+  // Baseline security headers for every API response.
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Referrer-Policy', 'no-referrer');
+    reply.header('Cross-Origin-Resource-Policy', 'same-site');
+    reply.header('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+    if (IS_PRODUCTION) {
+      reply.header('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    }
+    return payload;
+  });
+
   const db = openDatabase(dbPath);
-  await seedDatabase(db);
+  const seeded = await seedDatabase(db);
+  if (seeded && SEED_ADMIN_PASSWORD_GENERATED) {
+    app.log.warn(
+      `First start: administrator "${ADMIN_USERNAME}" created with a generated password: ${SEED_ADMIN_PASSWORD}  ` +
+        '(shown once. Set SEED_ADMIN_PASSWORD before first start to choose your own.)'
+    );
+  }
 
   app.addHook('onClose', async () => {
     db.close();
@@ -62,10 +88,13 @@ export async function buildApp({
 
   app.get('/api/v1/health', async () => ({
     status: 'ok',
-    version: '2.6.0',
+    version: '2.7.0',
     engine: 'fastify+sqlite-wal',
     timestamp: new Date().toISOString(),
   }));
+
+  // Public white-label configuration used by the sign-up flow.
+  app.get('/api/v1/config', async () => publicInstitutionConfig(INSTITUTION));
 
   registerAuthRoutes(app, db, auth);
   registerFeedRoutes(app, db, auth);

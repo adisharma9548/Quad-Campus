@@ -3,7 +3,10 @@ import {
   ADMIN_EMAIL,
   ADMIN_USERNAME,
   DEFAULT_GROUPS,
+  INSTITUTION,
   SEED_ADMIN_PASSWORD,
+  SEED_ADMIN_PASSWORD_GENERATED,
+  SEED_DEMO_DATA,
   SEED_STUDENT_PASSWORD,
 } from '../config/constants.ts';
 import type { UserRole, UserStatus } from '../types.ts';
@@ -36,12 +39,48 @@ interface SeedUser {
   passwordHash: string;
 }
 
-export async function seedDatabase(db: DatabaseSync): Promise<void> {
+/**
+ * Production bootstrap: creates ONLY the first administrator, and only when SEED_ADMIN_PASSWORD
+ * was set explicitly to a strong value (12+ characters). No demo content, no known passwords.
+ */
+async function bootstrapAdminOnly(db: DatabaseSync): Promise<boolean> {
+  if (SEED_ADMIN_PASSWORD_GENERATED || SEED_ADMIN_PASSWORD.length < 12) return false;
+  const program = INSTITUTION.programs[0]!;
+  const hash = await hashPassword(SEED_ADMIN_PASSWORD);
+  db.prepare(`
+    INSERT INTO users (
+      id, username, email, role, status, full_name, dob, department, year, section, branch,
+      bio, avatar_initials, interests_json, profile_public, discoverable, password_hash, created_at
+    ) VALUES (?, ?, ?, 'admin', 'active', ?, '', ?, ?, ?, ?, '', 'AD', '[]', 0, 0, ?, ?)
+  `).run(
+    'usr_admin_master',
+    ADMIN_USERNAME,
+    ADMIN_EMAIL,
+    'Administrator',
+    program.name,
+    INSTITUTION.years[0]!,
+    INSTITUTION.sections[0]!,
+    program.code,
+    hash,
+    new Date().toISOString()
+  );
+  for (const g of DEFAULT_GROUPS) {
+    db.prepare('INSERT OR IGNORE INTO custom_groups (owner_id, name) VALUES (?, ?)').run(
+      'usr_admin_master',
+      g
+    );
+  }
+  return true;
+}
+
+/** Returns true when the database was empty and has just been seeded. */
+export async function seedDatabase(db: DatabaseSync): Promise<boolean> {
   const countRow = db
     .prepare('SELECT COUNT(*) AS count FROM users')
     .get() as { count: number } | undefined;
   const existingCount = Number(countRow?.count || 0);
-  if (existingCount > 0) return;
+  if (existingCount > 0) return false;
+  if (!SEED_DEMO_DATA) return bootstrapAdminOnly(db);
 
   const now = Date.now();
   const adminHash = await hashPassword(SEED_ADMIN_PASSWORD);
@@ -952,4 +991,5 @@ export async function seedDatabase(db: DatabaseSync): Promise<void> {
   const insertNotif = db.prepare('INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, is_read, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)');
   insertNotif.run('n1', 'usr_seed_quantum_dev', 'green_circuit', 'answer', '@green_circuit replied to your Question on ESP32 serial sync', 'post', 'post_3', now - 1 * HOURS, new Date(now - 1 * HOURS).toISOString());
   insertNotif.run('n2', 'usr_seed_quantum_dev', 'code_wizard', 'follow_request', '@code_wizard requested to follow your Personal Space', 'request', 'req_1', now - 2 * HOURS, new Date(now - 2 * HOURS).toISOString());
+  return true;
 }

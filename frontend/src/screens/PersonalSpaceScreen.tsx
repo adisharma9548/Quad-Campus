@@ -13,6 +13,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useInstitution } from '../context/ConfigContext';
 import { useToast } from '../context/ToastContext';
 import { resolveApiMediaUrl } from '../services/apiClient';
 import {
@@ -32,6 +33,7 @@ export default function PersonalSpaceScreen({
   onNavigate: (screen: string) => void;
 }) {
   const { state, toggleProfileVisibility, togglePostLike } = useApp();
+  const institution = useInstitution();
   const { showToast } = useToast();
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [activeGroupFilter, setActiveGroupFilter] = useState('All');
@@ -102,14 +104,14 @@ export default function PersonalSpaceScreen({
                   size="sm"
                 />
                 <Badge variant="status" icon={ShieldCheck}>
-                  Verified College Network
+                  {institution.networkLabel}
                 </Badge>
               </div>
               <p className="text-xs text-ink/60">
-                Verified B.Tech Student • {state.branch || 'CSE'} ({state.year || '3rd'} Year)
+                Verified member{state.branch ? ` • ${state.branch}` : ''}{state.year ? ` (${state.year.replace(/\s*Year$/i, '')} Year)` : ''}
               </p>
               <p className="text-xs text-ink max-w-md pt-1 leading-relaxed">
-                {state.bio || 'CS junior exploring distributed systems and compilers.'}
+                {state.bio || 'Add a short bio in Settings.'}
               </p>
             </div>
           </div>

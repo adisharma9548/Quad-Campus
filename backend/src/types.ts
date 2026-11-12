@@ -148,6 +148,8 @@ export interface PostItem {
   timestamp: string;
   createdAtMs: number;
   createdAt: string;
+  edited: boolean;
+  editedAtMs: number | null;
   likes: number;
   likesCount: number;
   savesCount: number;

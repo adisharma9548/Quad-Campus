@@ -2,21 +2,23 @@ import React from 'react';
 import { UserPlus, LogIn } from 'lucide-react';
 import { Button, Card } from '../../components/ui';
 import { AuthSplitLayout } from '../../components/AuthSplitLayout';
+import { useInstitution } from '../../context/ConfigContext';
 
 export default function WelcomeScreen({
   onNavigate,
 }: {
   onNavigate: (screen: string) => void;
 }) {
+  const institution = useInstitution();
   return (
     <AuthSplitLayout>
       <Card className="p-6 sm:p-8 space-y-6">
         <div className="text-center lg:text-left">
           <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-ink font-display">
-            Get started on Quad
+            Get started on {institution.appName}
           </h2>
           <p className="text-sm text-ink/60 mt-1 leading-relaxed">
-            Connect with verified peers across your engineering department and batch.
+            {institution.tagline}
           </p>
         </div>
 

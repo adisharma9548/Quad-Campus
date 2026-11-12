@@ -8,13 +8,13 @@ import { IAuthService, AuthError } from './authInterface';
  * Set VITE_AUTH_MODE=real in .env to connect to real backend API services.
  * Defaults to 'mock' for local, offline development.
  */
-export const AUTH_MODE = (import.meta.env?.VITE_AUTH_MODE || 'mock').toLowerCase();
+export const AUTH_MODE: 'real' | 'mock' = __AUTH_REAL__ ? 'real' : 'mock';
 
 /**
  * Factory for Auth Service Implementation
  */
 function createAuthService(): IAuthService {
-  if (AUTH_MODE === 'real') {
+  if (__AUTH_REAL__) {
     return new RealApiAuthService();
   }
 

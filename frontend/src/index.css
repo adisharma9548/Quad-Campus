@@ -6,8 +6,8 @@
   --color-accent: var(--color-accent);
   --color-danger: var(--color-danger);
 
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
 
   /* Radius tokens: 8px controls, 12px cards, full pills */
   --radius-sm: 8px;
@@ -24,8 +24,8 @@
 :root {
   --color-canvas: #FFFFFF;
   --color-ink: #111111;
-  --color-accent: #0A7FEA;
-  --color-danger: #E5322D;
+  --color-accent: #0A68CC;
+  --color-danger: #DC2A25;
 
   --ease-quad: cubic-bezier(0.4, 0, 0.2, 1);
   --duration-fast: 150ms;
@@ -87,40 +87,33 @@ h1, h2, h3, .font-display {
   min-width: 44px;
 }
 
-/* Custom scrollbars with neutral ink tint */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background-color: color-mix(in srgb, var(--color-ink) 12%, transparent);
-  border-radius: 9999px;
+/* Hide scrollbars globally while preserving wheel, touch, and keyboard scrolling */
+html,
+body,
+* {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
-/* Hide scrollbar for clean snap feeds */
-.no-scrollbar::-webkit-scrollbar {
+*::-webkit-scrollbar,
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
   display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-/* Hide scrollbars unless hovered */
-.scrollbar-hover {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-.scrollbar-hover::-webkit-scrollbar {
   width: 0;
   height: 0;
 }
-.scrollbar-hover:hover {
-  scrollbar-width: thin;
+
+/* Legacy utility hooks kept for class compatibility */
+.no-scrollbar,
+.scrollbar-none,
+.scrollbar-hover {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
-.scrollbar-hover:hover::-webkit-scrollbar {
-  width: 6px;
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar,
+.scrollbar-hover::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }

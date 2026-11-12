@@ -52,6 +52,7 @@ export interface PostItem {
   groupName?: string;
   timestamp: string;
   createdAt?: string | number;
+  edited?: boolean;
   likes: number;
   isLiked?: boolean;
   comments?: number;

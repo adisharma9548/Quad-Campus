@@ -43,7 +43,7 @@ export default function TermsPrivacyScreen({
               Terms & Conditions and Privacy Policy
             </h2>
             <p className="text-xs text-ink/60">
-              Authoritative Campus Policy • Quad v2.6.0 • November 11, 2026
+              Authoritative Campus Policy • Quad v2.7.0 • November 11, 2026
             </p>
           </div>
           {onBack && (

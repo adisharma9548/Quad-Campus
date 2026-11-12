@@ -1,0 +1,38 @@
+{
+  "appName": "Campus Hub",
+  "networkLabel": "Springfield High Community",
+  "tagline": "Connect with classmates, clubs, and teachers.",
+  "programLabel": "House",
+  "programs": [
+    {
+      "name": "Red House",
+      "code": "RED"
+    },
+    {
+      "name": "Blue House",
+      "code": "BLU"
+    },
+    {
+      "name": "Green House",
+      "code": "GRN"
+    }
+  ],
+  "years": [
+    "Grade 9",
+    "Grade 10",
+    "Grade 11",
+    "Grade 12"
+  ],
+  "sections": [
+    "A",
+    "B",
+    "C"
+  ],
+  "emailPolicy": "domains",
+  "allowedEmailDomains": [
+    "springfield.edu"
+  ],
+  "emailPlaceholder": "name@springfield.edu",
+  "emailHint": "Use your school email. It is never shown to other students.",
+  "emailError": "Use your springfield.edu school email address."
+}

@@ -47,6 +47,9 @@ export interface AppNotificationItem {
   timestamp?: string;
   createdAt?: string;
   read?: boolean;
+  isRead?: boolean;
+  kind?: string;
+  actor?: string;
   [key: string]: unknown;
 }
 
@@ -152,6 +155,12 @@ export interface AppContextValue {
   markReelsSeen: () => Promise<void>;
   toggleReelLike: (reelId: string | number) => Promise<{ likes: number; liked: boolean } | null>;
   markBestAnswer: (postId: string | number, answerId: string) => Promise<void>;
+  markNotificationsRead: () => Promise<void>;
+  deletePost: (postId: string | number) => Promise<void>;
+  editPost: (
+    postId: string | number,
+    patch: { title?: string; content: string }
+  ) => Promise<PostItem>;
   addPostAnswer: (postId: string | number, replyOrText: string | PostAnswer) => Promise<PostAnswer>;
   toggleProfileVisibility: (makePublic: boolean) => Promise<void>;
   toggleDiscoverability: (enabled: boolean) => Promise<void>;
@@ -377,7 +386,7 @@ function shortYear(year = ''): string {
 export function AppProvider({ children }: { children: ReactNode }) {
   const { user, updateProfile } = useAuth();
   const [state, setState] = useState<AppState>(() =>
-    IS_REAL_BACKEND ? buildEmptyState() : mockInitialState
+    __AUTH_REAL__ ? buildEmptyState() : mockInitialState
   );
 
   const updateState = useCallback((updates: Partial<AppState>) => {
@@ -732,6 +741,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return res;
   }, []);
 
+  const markNotificationsRead = useCallback(async () => {
+    setState((prev) => ({
+      ...prev,
+      notifications: (prev.notifications || []).map((n) => ({ ...n, isRead: true, read: true })),
+    }));
+    if (IS_REAL_BACKEND) {
+      await apiRequest('/notifications/read-all', { method: 'POST' });
+    }
+  }, []);
+
+  const deletePost = useCallback(async (postId: string | number) => {
+    if (IS_REAL_BACKEND) {
+      await apiRequest(`/posts/${encodeURIComponent(postId)}`, { method: 'DELETE' });
+    }
+    setState((prev) => ({
+      ...prev,
+      publicPosts: (prev.publicPosts || []).filter((p) => p.id !== postId),
+      personalPosts: (prev.personalPosts || []).filter((p) => p.id !== postId),
+    }));
+  }, []);
+
+  const editPost = useCallback(
+    async (
+      postId: string | number,
+      patch: { title?: string; content: string }
+    ): Promise<PostItem> => {
+      let updated: PostItem | null = null;
+      if (IS_REAL_BACKEND) {
+        updated = await apiRequest<PostItem>(`/posts/${encodeURIComponent(postId)}`, {
+          method: 'PATCH',
+          body: patch,
+        });
+      }
+      const apply = <T extends PostItem>(p: T): T =>
+        p.id === postId
+          ? ({ ...p, ...(updated || { title: patch.title ?? p.title, content: patch.content }), edited: true } as T)
+          : p;
+      setState((prev) => ({
+        ...prev,
+        publicPosts: (prev.publicPosts || []).map(apply),
+        personalPosts: (prev.personalPosts || []).map(apply),
+      }));
+      return (updated || ({ id: postId, ...patch } as unknown as PostItem));
+    },
+    []
+  );
+
   const markBestAnswer = useCallback(async (postId: string | number, answerId: string) => {
     if (IS_REAL_BACKEND) {
       const res = await apiRequest<{ bestAnswerId: string | null }>(
@@ -1010,6 +1066,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         markReelsSeen,
         toggleReelLike,
         markBestAnswer,
+        markNotificationsRead,
+        deletePost,
+        editPost,
         addPostAnswer,
         toggleProfileVisibility,
         toggleDiscoverability,

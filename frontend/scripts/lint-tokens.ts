@@ -80,7 +80,7 @@ export function runLint({ foundationsOnly = false }: { foundationsOnly?: boolean
     const content = fs.readFileSync(file, 'utf8');
     const lines = content.split('\n');
 
-    lines.forEach((line, index) => {
+    lines.forEach((line: string, index: number) => {
       const lineNum = index + 1;
 
       // 1. Check banned colors

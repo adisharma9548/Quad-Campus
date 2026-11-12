@@ -83,17 +83,17 @@ export function Button({
 
   const variantStyles: Record<string, string> = {
     primary:
-      'bg-accent text-canvas font-semibold hover:opacity-90 active:opacity-100',
+      'bg-accent text-canvas font-semibold hover:brightness-90 active:brightness-100',
     secondary:
       'bg-ink/8 hover:bg-ink/12 text-ink font-medium active:bg-ink/16',
     destructive:
-      'bg-danger text-canvas font-semibold hover:opacity-90 active:opacity-100',
+      'bg-danger text-canvas font-semibold hover:brightness-90 active:brightness-100',
     outline:
       'border border-ink/12 bg-canvas hover:bg-ink/8 text-ink font-medium active:bg-ink/12',
     ghost:
       'text-ink/60 hover:text-ink hover:bg-ink/8 active:bg-ink/12 font-medium',
     accent:
-      'bg-accent text-canvas font-semibold hover:opacity-90 active:opacity-100',
+      'bg-accent text-canvas font-semibold hover:brightness-90 active:brightness-100',
   };
 
   // All buttons enforce the 44px min touch target with strict spacing scale (px-3, px-4, px-6, py-2, py-3)
@@ -432,7 +432,7 @@ export function Avatar({
       onClick={isClickable ? onClick : undefined}
       className={`relative inline-flex flex-shrink-0 select-none ${
         isClickable
-          ? 'cursor-pointer hover:opacity-90 active:scale-[0.96] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-full'
+          ? 'cursor-pointer hover:brightness-90 active:scale-[0.96] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-full'
           : ''
       } ${disabled ? 'opacity-30 cursor-not-allowed' : ''} ${className}`}
     >
@@ -991,7 +991,7 @@ export function MenuItem({
         <div className="flex items-center gap-2">
           <p className="text-sm font-semibold truncate">{label}</p>
           {badge && (
-            <span className="bg-danger text-white text-[10px] font-bold px-2 py-1 rounded-full">
+            <span className="bg-danger text-canvas text-xs font-bold px-2 py-1 rounded-full">
               {badge}
             </span>
           )}

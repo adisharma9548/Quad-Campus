@@ -3,8 +3,7 @@
  */
 
 export const API_BASE_URL = (import.meta.env?.VITE_API_BASE_URL || '/api/v1').replace(/\/$/, '');
-export const IS_REAL_BACKEND =
-  (import.meta.env?.VITE_AUTH_MODE || 'mock').toLowerCase() === 'real';
+export const IS_REAL_BACKEND: boolean = __AUTH_REAL__;
 
 const TOKEN_STORAGE_KEY = 'quad_session_token';
 

@@ -106,7 +106,7 @@ export default function ForgotPasswordScreen({
                 label="College Email or Campus Handle"
                 id="resetIdentifier"
                 name="identifier"
-                placeholder="e.g. aarav@btech.college.edu.in or quantum_dev"
+                placeholder="Username or email"
                 icon={Mail}
                 value={identifier}
                 onChange={(e) => {

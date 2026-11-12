@@ -162,6 +162,12 @@ export function PostCard({
             </p>
             <p className="text-xs text-ink/60 flex items-center gap-1 flex-wrap">
               <span>{post.timestamp}</span>
+              {post.edited && (
+                <>
+                  <span aria-hidden="true">•</span>
+                  <span>edited</span>
+                </>
+              )}
               {nonDefaultAudience && (
                 <>
                   <span aria-hidden="true">•</span>

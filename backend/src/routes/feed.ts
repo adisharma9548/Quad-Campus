@@ -36,6 +36,7 @@ interface JoinedPostRow {
   best_answer_id: string | null;
   shares_count: number;
   status: PostStatus;
+  edited_at_ms: number | null;
   created_at_ms: number;
   created_at: string;
   author_username: string;
@@ -149,6 +150,8 @@ function loadAllPostsWithStats(db: DatabaseSync, viewerId: string | null): PostI
       timestamp: formatRelativeTime(r.created_at_ms, now),
       createdAtMs: r.created_at_ms,
       createdAt: r.created_at,
+      edited: Boolean(r.edited_at_ms),
+      editedAtMs: r.edited_at_ms || null,
       likes: Number(r.likes_count || 0),
       likesCount: Number(r.likes_count || 0),
       savesCount: Number(r.saves_count || 0),
@@ -581,6 +584,58 @@ export function registerFeedRoutes(
     }
   );
 
+  // ── Edit own post (PATCH /api/v1/posts/:id) ───────────────────────────
+  app.patch<{ Params: { id: string }; Body: { title?: string; content?: string; hashtags?: string[] } }>(
+    '/api/v1/posts/:id',
+    { preHandler: auth.requireAuth },
+    async (request, reply) => {
+      const viewer = request.auth!.userRow;
+      const post = db
+        .prepare("SELECT id, author_id, content, title, hashtags_json FROM posts WHERE id = ? AND status != 'deleted'")
+        .get(request.params.id) as
+        | { id: string; author_id: string; content: string; title: string; hashtags_json: string | null }
+        | undefined;
+      if (!post) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Post not found.' } });
+      }
+      if (post.author_id !== viewer.id) {
+        return reply.code(403).send({
+          error: { code: 'FORBIDDEN', message: 'Only the author can edit this post.' },
+        });
+      }
+      const body = request.body || {};
+      const content = body.content === undefined ? post.content : String(body.content).trim();
+      const title = body.title === undefined ? post.title : String(body.title).trim().slice(0, 140);
+      if (!content) {
+        return reply.code(400).send({
+          error: { code: 'EMPTY_CONTENT', message: 'A post cannot be empty.' },
+        });
+      }
+      if (content.length > 2000) {
+        return reply.code(400).send({
+          error: { code: 'CONTENT_TOO_LONG', message: 'Posts are capped at 2000 characters.' },
+        });
+      }
+      const explicitTags = Array.isArray(body.hashtags) ? body.hashtags : [];
+      const inlineTags = content.match(/#[a-zA-Z0-9_]{2,30}/g) || [];
+      const hashtags = Array.from(
+        new Set(
+          [...explicitTags, ...inlineTags]
+            .map((t) => String(t).trim())
+            .filter(Boolean)
+            .map((t) => (t.startsWith('#') ? t : `#${t}`))
+        )
+      ).slice(0, 6);
+
+      db.prepare(
+        'UPDATE posts SET title = ?, content = ?, hashtags_json = ?, edited_at_ms = ? WHERE id = ?'
+      ).run(title, content, JSON.stringify(hashtags), Date.now(), post.id);
+
+      const updated = loadAllPostsWithStats(db, viewer.id).find((p) => p.id === post.id)!;
+      return serializePostForResponse(updated);
+    }
+  );
+
   app.delete<{ Params: { id: string } }>(
     '/api/v1/posts/:id',
     { preHandler: auth.requireAuth },
@@ -592,9 +647,11 @@ export function registerFeedRoutes(
       if (!post) {
         return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Post not found.' } });
       }
-      if (post.author_id !== viewer.id && viewer.role !== 'admin') {
+      // Authors only. Administrators must use /api/v1/admin/posts/:id, which enforces
+      // password re-authentication and writes an audit log entry.
+      if (post.author_id !== viewer.id) {
         return reply.code(403).send({
-          error: { code: 'FORBIDDEN', message: 'Not authorized to delete this post.' },
+          error: { code: 'FORBIDDEN', message: 'Only the author can delete this post.' },
         });
       }
       db.prepare(

@@ -272,7 +272,7 @@ export default function DiscoverScreen({
                         className={`w-full min-h-[44px] py-2 rounded-[8px] text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer border disabled:cursor-default ${
                           isFollowing || isRequested
                             ? 'bg-ink/6 text-ink border-ink/12'
-                            : 'bg-accent text-canvas border-transparent hover:opacity-90'
+                            : 'bg-accent text-canvas border-transparent hover:brightness-90'
                         }`}
                       >
                         {isFollowing ? (

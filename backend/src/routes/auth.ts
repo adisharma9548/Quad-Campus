@@ -5,12 +5,14 @@ import {
   AUTH_SECRET,
   DEFAULT_GROUPS,
   DEPARTMENT_MAP,
+  INSTITUTION,
   OFFICIAL_DEPARTMENTS,
   RESERVED_USERNAMES,
   SECURITY_LIMITS,
   VALID_SECTIONS,
   VALID_YEARS,
 } from '../config/constants.ts';
+import { isEmailAllowed } from '../config/institution.ts';
 import { checkRateLimit, toPeerUser, toSelfUser } from '../middleware/auth.ts';
 import type { AuthMiddleware, LoginAttemptRow, UserRow } from '../types.ts';
 import { hashPassword, signSessionToken, verifyPasswordHash } from '../utils/crypto.ts';
@@ -92,15 +94,8 @@ export function registerAuthRoutes(
         'Mobile numbers are strictly not accepted. Use your college-issued email address.'
       );
     }
-    const emailRegex =
-      /^[a-z0-9._%+-]+@[a-z0-9.-]+\.(edu(\.[a-z]{2})?|ac\.[a-z]{2}|college\.[a-z.]+)$/i;
-    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
-      return apiError(
-        reply,
-        400,
-        'INVALID_COLLEGE_EMAIL',
-        'A valid college email (.edu, .edu.in, .ac.in) is required to join Quad.'
-      );
+    if (!cleanEmail || !isEmailAllowed(cleanEmail, INSTITUTION)) {
+      return apiError(reply, 400, 'INVALID_COLLEGE_EMAIL', INSTITUTION.emailError);
     }
 
     const emailTaken = db.prepare('SELECT id FROM users WHERE email = ?').get(cleanEmail);
@@ -121,7 +116,7 @@ export function registerAuthRoutes(
         reply,
         400,
         'INVALID_DEPARTMENT',
-        'Select one of the official engineering departments.'
+        `Select one of the available ${INSTITUTION.programLabel.toLowerCase()} options.`
       );
     }
 
@@ -130,7 +125,7 @@ export function registerAuthRoutes(
         reply,
         400,
         'MISSING_YEAR',
-        'Academic Year selection is compulsory (1st–4th Year).'
+        'Academic year selection is compulsory.'
       );
     }
     if (!VALID_YEARS.includes(year)) {
@@ -138,7 +133,7 @@ export function registerAuthRoutes(
         reply,
         400,
         'INVALID_YEAR',
-        'Academic Year must be 1st, 2nd, 3rd, or 4th Year.'
+        `Academic year must be one of: ${VALID_YEARS.join(', ')}.`
       );
     }
 
@@ -147,11 +142,11 @@ export function registerAuthRoutes(
         reply,
         400,
         'MISSING_SECTION',
-        'Section selection is compulsory (A through H).'
+        'Section selection is compulsory.'
       );
     }
     if (!VALID_SECTIONS.includes(rawSection)) {
-      return apiError(reply, 400, 'INVALID_SECTION', 'Section must be between A and H.');
+      return apiError(reply, 400, 'INVALID_SECTION', `Section must be one of: ${VALID_SECTIONS.join(', ')}.`);
     }
 
     if (!/^[a-z0-9_]{3,20}$/.test(cleanUsername)) {
@@ -201,7 +196,7 @@ export function registerAuthRoutes(
 
     const passwordHash = await hashPassword(password);
     const id = 'usr_' + crypto.randomUUID().slice(0, 12);
-    const shortBranch = DEPARTMENT_MAP[department] || 'CSE';
+    const shortBranch = DEPARTMENT_MAP[department] || INSTITUTION.programs[0]!.code;
     const initials =
       String(body.avatarInitials || '').trim().toUpperCase().slice(0, 2) ||
       (fullName

@@ -16,8 +16,8 @@ export const COLORS = {
   light: {
     canvas: '#FFFFFF', // ~62%: backgrounds, cards, sheets, modals, nav bars
     ink: '#111111',    // ~28%: text, icons, borders, active tab, secondary buttons
-    accent: '#0A7FEA', // ~8%: primary buttons, links, @mentions, focus rings
-    danger: '#E5322D', // ~2%: ONLY report, delete, block, destructive confirms, errors
+    accent: '#0A68CC', // ~8%: primary buttons, links, @mentions, focus rings (5.4:1 on white, WCAG AA)
+    danger: '#DC2A25', // ~2%: ONLY report, delete, block, destructive confirms, errors
   },
   dark: {
     canvas: '#0B0B0C',
@@ -68,8 +68,8 @@ export const TYPOGRAPHY = {
     bold: 700,
   },
   fonts: {
-    sans: "'Inter', system-ui, -apple-system, sans-serif",
-    display: "'Space Grotesk', system-ui, sans-serif",
+    sans: "'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif",
+    display: "'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif",
   },
 };
 

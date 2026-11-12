@@ -149,7 +149,7 @@ export default function FollowRequestsScreen({
                       variant="secondary"
                       size="sm"
                       onClick={() => handleDecline(req.id, req.username)}
-                      ariaLabel={`Decline follow request from @${req.username} silently`}
+                      ariaLabel={`Decline Silently, follow request from @${req.username}`}
                     >
                       Decline Silently
                     </Button>
@@ -158,7 +158,7 @@ export default function FollowRequestsScreen({
                       size="sm"
                       icon={Tag}
                       onClick={() => handleStartAccept(req)}
-                      ariaLabel={`Accept and assign visibility groups for @${req.username}`}
+                      ariaLabel={`Accept & Assign Groups, for @${req.username}`}
                     >
                       Accept & Assign Groups
                     </Button>

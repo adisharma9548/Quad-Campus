@@ -149,7 +149,7 @@ export default function ThreadsScreen({
                   <button
                     type="button"
                     onClick={() => toggleLike(post.id)}
-                    aria-label={isLiked ? 'Unlike thread' : 'Like thread'}
+                    aria-label={`${isLiked ? 'Unlike thread' : 'Like thread'} ${post.likes || 0}`}
                     className={`min-h-[44px] px-3 py-2 rounded-[8px] flex items-center gap-2 transition-all cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
                       isLiked ? 'text-ink font-bold bg-ink/6' : 'hover:text-ink hover:bg-ink/4'
                     }`}
@@ -165,7 +165,7 @@ export default function ThreadsScreen({
                         activeReplyPostId === post.id ? null : post.id
                       )
                     }
-                    aria-label={`Reply to @${post.username}`}
+                    aria-label={`${post.replyCount || (post.replies?.length || 0)} replies, reply to @${post.username}`}
                     className="min-h-[44px] px-3 py-2 rounded-[8px] flex items-center gap-2 hover:text-ink hover:bg-ink/4 transition-colors cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <MessageSquare size={16} />

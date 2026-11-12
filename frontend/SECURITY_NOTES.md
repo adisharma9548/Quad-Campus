@@ -149,7 +149,7 @@ Content-Type: application/json
   - **Body**:
     ```json
     {
-      "password": "Admin@Campus2026"
+      "password": "<your-admin-password>"
     }
     ```
   - **Returns**: `200 OK` `{ "verified": true }` or `401 Unauthorized`.

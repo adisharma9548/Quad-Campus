@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   VolumeX,
   UserX,
@@ -14,8 +14,12 @@ import {
   AlertCircle,
   WifiOff,
   RefreshCw,
+  Search,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { IS_REAL_BACKEND } from '../services/apiClient';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import {
@@ -25,6 +29,7 @@ import {
   Modal,
   EmptyState,
   MenuItem,
+  TextField,
 } from '../components/ui';
 import { PostCard, PostCardSkeleton } from '../components/PostCard';
 import { ReelStrip } from '../components/ReelStrip';
@@ -57,6 +62,9 @@ export default function PublicFeedScreen({
     submitReport,
     markBestAnswer,
     addPostAnswer,
+    deletePost,
+    editPost,
+    refreshFeed,
   } = useApp();
   const { user } = useAuth();
   const { showToast } = useToast();
@@ -72,6 +80,16 @@ export default function PublicFeedScreen({
   const [localSavedIds, setLocalSavedIds] = useState<Set<string | number>>(() => new Set());
   const [hiddenPostIds, setHiddenPostIds] = useState<Set<string | number>>(() => new Set());
   const [errorCleared, setErrorCleared] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const [editTarget, setEditTarget] = useState<import('../types/quad').PostItem | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editBusy, setEditBusy] = useState(false);
+  const [confirmDeletePost, setConfirmDeletePost] = useState<import('../types/quad').PostItem | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const firstFetchSkipped = useRef(false);
   const [isOnline, setIsOnline] = useState(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -106,10 +124,58 @@ export default function PublicFeedScreen({
     };
   }, []);
 
-  const currentUsername = user?.username || state.username || 'quantum_dev';
-  const currentInitials = user?.avatarInitials || state.userInitials || 'QD';
-  const userBranch = user?.branch || state.branch || 'CSE';
-  const userYear = (user?.year || state.year || '3rd').replace(/\s*Year/i, '').trim();
+  const currentUsername = user?.username || state.username || '';
+  const currentInitials = user?.avatarInitials || state.userInitials || '?';
+  const userBranch = user?.branch || state.branch || '';
+  const userYear = (user?.year || state.year || '').replace(/\s*Year/i, '').trim();
+
+  // Picks up a search handed over from elsewhere (for example a trending tag in the side rail).
+  useEffect(() => {
+    const consume = () => {
+      try {
+        const pending = sessionStorage.getItem('quad_pending_search');
+        if (pending) {
+          sessionStorage.removeItem('quad_pending_search');
+          setSearchInput(pending);
+          setSearchQuery(pending);
+        }
+      } catch {
+        // ignore storage errors
+      }
+    };
+    consume();
+    window.addEventListener('quad:pending-search', consume);
+    return () => window.removeEventListener('quad:pending-search', consume);
+  }, []);
+
+  // Debounce the search box so we do not hit the API on every keystroke.
+  useEffect(() => {
+    const handle = window.setTimeout(() => setSearchQuery(searchInput.trim()), 300);
+    return () => window.clearTimeout(handle);
+  }, [searchInput]);
+
+  // With a real backend, scope (branch/year) and search are applied on the server, which can see
+  // every author's real branch and year. Client-side filtering below is only used in mock mode.
+  useEffect(() => {
+    if (!IS_REAL_BACKEND) return undefined;
+    if (!firstFetchSkipped.current) {
+      firstFetchSkipped.current = true;
+      return undefined;
+    }
+    let cancelled = false;
+    setIsSearching(true);
+    refreshFeed({ scope: feedFilter, q: searchQuery || activeTag || undefined })
+      .catch(() => {
+        if (!cancelled) showToast('Could not load posts. Check your connection.', 'error');
+      })
+      .finally(() => {
+        if (!cancelled) setIsSearching(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedFilter, searchQuery, activeTag]);
 
   const posts = useMemo(() => state.publicPosts || [], [state.publicPosts]);
   const reels = useMemo(() => state.reels || [], [state.reels]);
@@ -135,19 +201,19 @@ export default function PublicFeedScreen({
 
   const filteredPosts = useMemo(() => {
     return visiblePosts.filter((post) => {
-      if (feedFilter === 'branch') {
+      if (!IS_REAL_BACKEND && feedFilter === 'branch') {
         const postBranch = (post.branch || '').toLowerCase();
         if (post.audience !== 'branch' && postBranch !== userBranch.toLowerCase()) {
           return false;
         }
       }
-      if (feedFilter === 'year') {
+      if (!IS_REAL_BACKEND && feedFilter === 'year') {
         const postYear = (post.year || '').replace(/\s*Year/i, '').trim().toLowerCase();
         if (post.audience !== 'year' && postYear !== userYear.toLowerCase()) {
           return false;
         }
       }
-      if (activeTag) {
+      if (activeTag && !IS_REAL_BACKEND) {
         const tags = Array.isArray(post.hashtags) ? post.hashtags : [];
         if (!tags.some((t) => t.toLowerCase() === activeTag.toLowerCase())) {
           return false;
@@ -185,10 +251,25 @@ export default function PublicFeedScreen({
 
   const handleCopyLink = (post: import('../types/quad').PostItem | null) => {
     if (!post) return;
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(window.location.href).catch(() => {});
+    // Quad is a single-page app without per-post URLs yet, so we share the post text instead of a
+    // link that would not open the post.
+    const headline = post.title || '';
+    const tags = Array.isArray(post.hashtags) ? post.hashtags.join(' ') : '';
+    const text = [headline, post.content, tags, `Posted by @${post.username} on Quad`]
+      .filter(Boolean)
+      .join('\n\n');
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      navigator.share({ text }).catch(() => {});
+      return;
     }
-    showToast(`Copied link to @${post.username}'s post`, 'success');
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => showToast('Post text copied to clipboard', 'success'))
+        .catch(() => showToast('Could not copy. Select the text and copy it manually.', 'error'));
+      return;
+    }
+    showToast('Sharing is not supported on this device', 'error');
   };
 
   const handleHidePost = async (post: import('../types/quad').PostItem | null) => {
@@ -197,6 +278,47 @@ export default function PublicFeedScreen({
     setSheetPost(null);
     await hidePost(post.id);
     showToast('Post hidden from your feed', 'info');
+  };
+
+  const openEdit = (post: import('../types/quad').PostItem | null) => {
+    if (!post) return;
+    setEditTarget(post);
+    setEditTitle(post.title || '');
+    setEditContent(post.content || '');
+    setSheetPost(null);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editTarget || editBusy) return;
+    if (!editContent.trim()) {
+      showToast('A post cannot be empty.', 'error');
+      return;
+    }
+    setEditBusy(true);
+    try {
+      await editPost(editTarget.id, { title: editTitle.trim(), content: editContent.trim() });
+      showToast('Post updated', 'success');
+      setEditTarget(null);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to save changes', 'error');
+    } finally {
+      setEditBusy(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDeletePost || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await deletePost(confirmDeletePost.id);
+      showToast('Post deleted', 'success');
+      setConfirmDeletePost(null);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to delete post', 'error');
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   const handleMuteUser = async (post: import('../types/quad').PostItem | null) => {
@@ -303,6 +425,44 @@ export default function PublicFeedScreen({
         onSelectReel={() => onNavigate?.('reels')}
         onSeeAll={() => onNavigate?.('reels')}
       />
+
+      {/* Search posts, people's usernames, and #tags */}
+      <div role="search" className="relative">
+        <label htmlFor="feed-search" className="sr-only">
+          Search posts, usernames, and tags
+        </label>
+        <Search
+          size={16}
+          className="absolute left-4 top-1/2 -translate-y-1/2 text-ink/60 pointer-events-none"
+          aria-hidden="true"
+        />
+        <input
+          id="feed-search"
+          type="search"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search posts, usernames, #tags"
+          autoComplete="off"
+          maxLength={80}
+          className="w-full min-h-[44px] pl-12 pr-12 rounded-full bg-ink/6 border border-ink/12 text-sm text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent focus:bg-canvas"
+        />
+        {searchInput && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchInput('');
+              setSearchQuery('');
+            }}
+            aria-label="Clear search"
+            className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-ink/60 hover:text-ink cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        )}
+        <p className="sr-only" role="status" aria-live="polite">
+          {isSearching ? 'Searching' : searchQuery ? `${filteredPosts.length} results` : ''}
+        </p>
+      </div>
 
       {/* 2. Filter Pills: All campus (ink-filled), My branch, My year (outlined) */}
       <div className="flex items-center justify-between gap-2 pb-3 border-b border-ink/12 flex-wrap">
@@ -550,26 +710,49 @@ export default function PublicFeedScreen({
                 description="Hide this post from your feed"
                 onClick={() => handleHidePost(sheetPost)}
               />
-              <MenuItem
-                icon={VolumeX}
-                label="Mute user"
-                description="Stop seeing posts from this user silently"
-                onClick={() => handleMuteUser(sheetPost)}
-              />
-              <MenuItem
-                icon={UserX}
-                label="Block"
-                description="Prevent them from viewing or interacting with you"
-                onClick={() => setConfirmBlockPost(sheetPost)}
-                danger
-              />
-              <MenuItem
-                icon={Flag}
-                label="Report"
-                description="Report harassment, impersonation, or safety concerns"
-                onClick={() => setConfirmReportPost(sheetPost)}
-                danger
-              />
+              {sheetPost && currentUsername && sheetPost.username === currentUsername ? (
+                <>
+                  <MenuItem
+                    icon={Pencil}
+                    label="Edit post"
+                    description="Fix a typo or update the details"
+                    onClick={() => openEdit(sheetPost)}
+                  />
+                  <MenuItem
+                    icon={Trash2}
+                    label="Delete post"
+                    description="Remove this post for everyone"
+                    onClick={() => {
+                      setConfirmDeletePost(sheetPost);
+                      setSheetPost(null);
+                    }}
+                    danger
+                  />
+                </>
+              ) : (
+                <>
+                  <MenuItem
+                    icon={VolumeX}
+                    label="Mute user"
+                    description="Stop seeing posts from this user silently"
+                    onClick={() => handleMuteUser(sheetPost)}
+                  />
+                  <MenuItem
+                    icon={UserX}
+                    label="Block"
+                    description="Prevent them from viewing or interacting with you"
+                    onClick={() => setConfirmBlockPost(sheetPost)}
+                    danger
+                  />
+                  <MenuItem
+                    icon={Flag}
+                    label="Report"
+                    description="Report harassment, impersonation, or safety concerns"
+                    onClick={() => setConfirmReportPost(sheetPost)}
+                    danger
+                  />
+                </>
+              )}
             </div>
 
             <div className="pt-2">
@@ -584,6 +767,68 @@ export default function PublicFeedScreen({
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Edit own post */}
+      <Modal
+        isOpen={Boolean(editTarget)}
+        onClose={() => setEditTarget(null)}
+        title="Edit post"
+        description="Changes are visible to everyone who can see this post. It will be marked as edited."
+        size="md"
+      >
+        <form onSubmit={handleSaveEdit} className="space-y-4 pt-2">
+          <TextField
+            label="Title"
+            name="edit-title"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            maxLength={140}
+          />
+          <TextField
+            label="Post"
+            name="edit-content"
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            multiline
+            rows={6}
+            maxLength={2000}
+            required
+            helper={`${editContent.length}/2000`}
+          />
+          <div className="flex items-center justify-end gap-3">
+            <Button variant="secondary" size="md" onClick={() => setEditTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" size="md" loading={editBusy}>
+              Save changes
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete own post */}
+      <Modal
+        isOpen={Boolean(confirmDeletePost)}
+        onClose={() => setConfirmDeletePost(null)}
+        title="Delete this post?"
+        description="This removes the post for everyone. It cannot be undone."
+        size="md"
+      >
+        <div className="flex items-center justify-end gap-3 pt-2">
+          <Button variant="secondary" size="md" onClick={() => setConfirmDeletePost(null)}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            size="md"
+            icon={Trash2}
+            loading={deleteBusy}
+            onClick={handleConfirmDelete}
+          >
+            Delete post
+          </Button>
+        </div>
       </Modal>
 
       {/* 6. Post Replies / Question Answers Sheet Modal */}

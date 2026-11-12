@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { useInstitution } from './context/ConfigContext';
+import { NotificationBell } from './components/NotificationBell';
 import { AppProvider, useApp } from './context/AppContext';
 import { ToastProvider } from './context/ToastContext';
 
@@ -60,7 +62,6 @@ import {
   LogIn,
   LogOut,
   KeyRound,
-  Bell,
   User,
   Plus,
   Check,
@@ -239,13 +240,14 @@ const PUBLIC_SCREENS = [
   'onboarding',
 ];
 
-const APP_VERSION = '2.6.0';
+const APP_VERSION = '2.7.0';
 
 // Auth flow screens for unauthenticated users
 const AUTH_GUEST_SCREENS = ['welcome', 'signup', 'login', 'forgot_password'];
 
 function AppShell() {
   const { user, isAuthenticated, isLoading, logOut } = useAuth();
+  const institution = useInstitution();
   const [currentPath, setCurrentPath] = useState(() => {
     if (typeof window !== 'undefined') {
       return window.location.pathname;
@@ -546,18 +548,19 @@ function AppShell() {
                 <button
                   type="button"
                   onClick={() => navigate('signup')}
-                  className="min-h-[44px] px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:opacity-90 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className="min-h-[44px] px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:brightness-90 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   Sign up
                 </button>
               </>
             ) : (
               <>
+                <NotificationBell onNavigate={navigate} />
                 <div className="relative">
                   <button
                     type="button"
                     onClick={() => setAvatarMenuOpen((prev) => !prev)}
-                    aria-label="Open account menu"
+                    aria-label={`${currentInitials}, account menu`}
                     aria-expanded={avatarMenuOpen}
                     className="min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center hover:bg-ink/8 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
@@ -580,10 +583,10 @@ function AppShell() {
                           @{currentUsername}
                         </p>
                         <p className="text-xs text-ink/60 truncate">
-                          {user?.branch || state.branch || 'CSE'} • {user?.year || state.year || '3rd'} Year
+                          {[user?.branch || state.branch, (user?.year || state.year || '').replace(/\s*Year$/i, '') && `${(user?.year || state.year || '').replace(/\s*Year$/i, '')} Year`].filter(Boolean).join(' • ')}
                         </p>
                         <Badge variant="status" icon={ShieldCheck}>
-                          Verified College Network
+                          {institution.networkLabel}
                         </Badge>
                       </div>
                       <button
@@ -624,7 +627,7 @@ function AppShell() {
                 <button
                   type="button"
                   onClick={() => setIsCreateModalOpen(true)}
-                  className="hidden md:inline-flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className="hidden md:inline-flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:brightness-90 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <Plus size={16} strokeWidth={2.5} aria-hidden="true" />
                   <span>Post</span>
@@ -872,14 +875,22 @@ function AppShell() {
                     <button
                       key={topic.tag}
                       type="button"
-                      onClick={() => navigate('threads')}
+                      onClick={() => {
+                        try {
+                          sessionStorage.setItem('quad_pending_search', topic.tag);
+                        } catch {
+                          // storage unavailable: the feed simply opens unfiltered
+                        }
+                        navigate('feed');
+                        window.dispatchEvent(new Event('quad:pending-search'));
+                      }}
                       className="w-full min-h-[44px] text-left px-2 py-2 rounded-[8px] hover:bg-ink/8 transition-colors flex items-center justify-between group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     >
                       <span className="text-[13px] font-medium text-accent group-hover:underline">
                         {topic.tag}
                       </span>
                       <span className="text-xs text-ink/60">
-                        {topic.posts} posts
+                        {topic.posts} {topic.posts === 1 ? 'post' : 'posts'}
                       </span>
                     </button>
                   ))}
@@ -920,7 +931,7 @@ function AppShell() {
         )}
       </div>
 
-      {/* ═══════════ MOBILE BOTTOM TAB BAR (< 768px): Feed, Reels, +, Alerts, Profile ═══════════ */}
+      {/* ═══════════ MOBILE BOTTOM TAB BAR (< 768px): Feed, Reels, +, Requests, Profile ═══════════ */}
       {isAuthenticated && !isAuthScreen && (
         <nav
           aria-label="Mobile bottom navigation"
@@ -938,8 +949,8 @@ function AppShell() {
             { id: 'create', label: 'Create post', icon: Plus, primary: true },
             {
               id: 'requests',
-              label: 'Alerts',
-              icon: Bell,
+              label: 'Requests',
+              icon: UserPlus,
               badgeCount: followRequestCount,
             },
             { id: 'profile', label: 'Profile', icon: User },
@@ -953,7 +964,7 @@ function AppShell() {
                   type="button"
                   onClick={() => setIsCreateModalOpen(true)}
                   aria-label="Create post"
-                  className="min-h-[44px] min-w-[44px] px-4 rounded-full bg-accent text-canvas flex items-center justify-center cursor-pointer hover:opacity-90 active:scale-[0.98] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className="min-h-[44px] min-w-[44px] px-4 rounded-full bg-accent text-canvas flex items-center justify-center cursor-pointer hover:brightness-90 active:scale-[0.98] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 >
                   <Plus size={20} strokeWidth={2.5} />
                 </button>

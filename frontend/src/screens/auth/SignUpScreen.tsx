@@ -19,22 +19,7 @@ import { useToast } from '../../context/ToastContext';
 import { Button, TextField, Avatar, Card, Modal } from '../../components/ui';
 import { AuthSplitLayout } from '../../components/AuthSplitLayout';
 import TermsPrivacyScreen from '../TermsPrivacyScreen';
-
-// Official recognized engineering departments (compulsory full forms)
-const OFFICIAL_DEPARTMENTS = [
-  'Information Technology',
-  'Computer Science & Engineering - Computer Science',
-  'Computer Science & Engineering - Data Science',
-  'Computer Science & Engineering - Artificial Intelligence & Machine Learning',
-  'Computer Science & Engineering - Internet of Things',
-  'Civil Engineering',
-  'Mechanical Engineering',
-  'Electrical & Electronics Engineering',
-  'Electronics & Communication Engineering',
-];
-
-const ACADEMIC_YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year'];
-const SECTIONS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+import { useInstitution } from '../../context/ConfigContext';
 
 // Mock list of campus interest tags
 const CAMPUS_INTERESTS = [
@@ -104,6 +89,12 @@ interface SignUpScreenProps {
 }
 
 export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
+  const institution = useInstitution();
+  const OFFICIAL_DEPARTMENTS = institution.programs;
+  const ACADEMIC_YEARS = institution.years;
+  const SECTIONS = institution.sections;
+  const programLabel = institution.programLabel;
+  const programLabelLower = programLabel.toLowerCase();
   const { signUp, checkUsernameAvailable } = useAuth();
   const { showToast } = useToast();
 
@@ -164,10 +155,12 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
     if (field === 'email') {
       const trimmed = (value || '').trim();
       if (!trimmed) {
-        error = 'College email address is required.';
+        error = 'Email address is required.';
       } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
         error =
-          'Please enter a valid college email address (e.g. student@college.edu.in). Mobile numbers are not permitted.';
+          institution.emailPolicy === 'open'
+            ? 'Please enter a valid email address. Mobile numbers are not permitted.'
+            : `Please enter a valid email address (e.g. ${institution.emailPlaceholder}). Mobile numbers are not permitted.`;
       }
     }
 
@@ -204,7 +197,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
 
     if (field === 'department') {
       if (!value || !value.trim()) {
-        error = 'Engineering department is compulsory. Please select your official department.';
+        error = `${programLabel} is compulsory. Please select yours.`;
       }
     }
 
@@ -459,7 +452,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
               type="button"
               onClick={handleBack}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-[8px] bg-ink/6 hover:bg-ink/12 text-ink text-xs font-semibold min-h-[44px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              aria-label="Go back to previous step"
+              aria-label={currentStep === 1 ? 'Cancel sign-up' : 'Back to previous step'}
             >
               <ChevronLeft size={16} />
               <span>{currentStep === 1 ? 'Cancel' : 'Back'}</span>
@@ -483,6 +476,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
           {/* Progress bar */}
           <div
             role="progressbar"
+            aria-label="Sign-up progress"
             aria-valuenow={currentStep}
             aria-valuemin={1}
             aria-valuemax={totalSteps}
@@ -513,16 +507,16 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
                   Create your campus account
                 </h2>
                 <p className="text-sm text-ink/60 mt-1">
-                  Start with your verified college email. Mobile phone numbers are strictly not permitted.
+                  {institution.emailPolicy === 'open' ? 'Start with your email address.' : 'Start with your verified college email.'} Mobile phone numbers are not permitted.
                 </p>
               </div>
 
               <div className="space-y-4">
                 <TextField
-                  label="Verified College Email"
+                  label={institution.emailPolicy === 'open' ? 'Email' : 'Verified College Email'}
                   id="email"
                   name="email"
-                  placeholder="student@btech.college.edu.in"
+                  placeholder={institution.emailPlaceholder}
                   icon={Mail}
                   value={formData.email}
                   onChange={(e) =>
@@ -530,7 +524,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
                   }
                   onBlur={() => handleBlur('email')}
                   error={touched.email ? errors.email : ''}
-                  helper="Strictly verified college email (.edu or campus domain). Never displayed to peers on feeds or profiles."
+                  helper={institution.emailHint}
                   autoComplete="email"
                   inputMode="email"
                 />
@@ -598,7 +592,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
                   Student Verification & Academic Registry
                 </h2>
                 <p className="text-sm text-ink/60 mt-1">
-                  Department, year, and section are compulsory and cryptographically locked to your college email.
+                  Program, year, and section are compulsory and linked to your account.
                 </p>
               </div>
 
@@ -658,7 +652,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
                     htmlFor="departmentSelect"
                     className="block text-xs font-semibold tracking-wide uppercase text-ink/60"
                   >
-                    Engineering Department <span className="text-accent font-bold">*Compulsory</span>
+                    {programLabel} <span className="text-accent font-bold">*Compulsory</span>
                   </label>
                   <div className="relative">
                     <select
@@ -678,7 +672,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
                           : 'border-ink/12 hover:border-ink/24 focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none'
                       }`}
                     >
-                      <option value="">Select your official engineering department...</option>
+                      <option value="">{`Select your ${programLabelLower}...`}</option>
                       {OFFICIAL_DEPARTMENTS.map((dept) => (
                         <option key={dept} value={dept}>
                           {dept}
@@ -811,7 +805,7 @@ export default function SignUpScreen({ onNavigate }: SignUpScreenProps) {
                   label="Campus Username"
                   id="username"
                   name="username"
-                  placeholder="e.g. quantum_dev"
+                  placeholder="e.g. campus_coder"
                   icon={AtSign}
                   value={formData.username}
                   onChange={(e) => {

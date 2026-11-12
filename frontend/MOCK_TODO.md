@@ -318,7 +318,7 @@ The local mock authentication service auto-provisions the following accounts in 
 |---|---|---|---|---|
 | **Student** | `quantum_dev` | `aarav.patel@btech.college.edu.in` | `Campus@2026` *(also accepts `Campus@Password2026`)* | `student` |
 | **Student** | `cyber_sage` | `rohan.verma@btech.college.edu.in` | `Campus@2026` | `student` |
-| **Admin** | `quad_admin` | `admin.lead@btech.college.edu.in` | `Admin@Campus2026` | `admin` |
+| **Admin** | `quad_admin` | `admin.lead@btech.college.edu.in` | *(offline mock mode only; the real backend generates its own admin password)* | `admin` |
 
 ### 5.2 Environment Variables for Admin Seeding
 Admin account identity is configurable in `.env`:

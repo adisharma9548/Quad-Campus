@@ -707,6 +707,20 @@ export function registerSocialRoutes(
         ON CONFLICT(requester_id, target_id) DO UPDATE SET status = 'pending', created_at_ms = excluded.created_at_ms
       `).run(reqId, requester.id, target.id, now, nowIso);
 
+      db.prepare(
+        'INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        'n_' + crypto.randomUUID().slice(0, 10),
+        target.id,
+        requester.username,
+        'follow_request',
+        `@${requester.username} requested to follow your Personal Space`,
+        'request',
+        reqId,
+        now,
+        nowIso
+      );
+
       return { status: 'requested', id: reqId };
     }
   );
@@ -732,6 +746,20 @@ export function registerSocialRoutes(
 
       if (action === 'accept') {
         db.prepare("UPDATE follow_requests SET status = 'accepted' WHERE id = ?").run(reqRow.id);
+        const acceptedAt = Date.now();
+        db.prepare(
+          'INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(
+          'n_' + crypto.randomUUID().slice(0, 10),
+          reqRow.requester_id,
+          request.auth!.userRow.username,
+          'follow_accepted',
+          `@${request.auth!.userRow.username} accepted your follow request`,
+          'user',
+          request.auth!.userRow.username,
+          acceptedAt,
+          new Date(acceptedAt).toISOString()
+        );
         db.prepare(
           'INSERT OR REPLACE INTO follows (follower_id, followee_id, group_name, created_at) VALUES (?, ?, ?, ?)'
         ).run(reqRow.requester_id, uid, groupName, new Date().toISOString());
