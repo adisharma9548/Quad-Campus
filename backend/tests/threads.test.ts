@@ -219,6 +219,22 @@ describe('Part 3: Threads Reddit-Style Nested Replies', () => {
     assert.equal(crossThreadRes.statusCode, 400);
     assert.equal(crossThreadRes.json().error.code, 'INVALID_PARENT');
 
+    // Auto-mention replying to a user with Directory OFF must always be allowed
+    await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/users/me',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: { directoryVisible: false },
+    });
+    const autoMentionHiddenRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/threads/${t1.id}/replies`,
+      headers: { Authorization: `Bearer ${tokenC}` },
+      payload: { body: '@thread_wizard thanks for clarifying!', parentCommentId: parentInT1.id },
+    });
+    assert.equal(autoMentionHiddenRes.statusCode, 201);
+    assert.equal((autoMentionHiddenRes.json() as ReplyDto).replyToUsername, 'thread_wizard');
+
     // Too long (>2000 chars)
     const longRes = await app.inject({
       method: 'POST',
@@ -257,8 +273,8 @@ describe('Part 3: Threads Reddit-Style Nested Replies', () => {
     assert.equal(treeAfterDelete.items.length, 1);
     assert.equal(treeAfterDelete.items[0].content, '[deleted]');
     assert.equal(treeAfterDelete.items[0].isDeleted, true);
-    assert.equal(treeAfterDelete.items[0].replies.length, 1);
-    assert.equal(treeAfterDelete.items[0].replies[0].id, child.id);
+    assert.equal(treeAfterDelete.items[0].replies.length, 2);
+    assert.ok(treeAfterDelete.items[0].replies.some((r) => r.id === child.id));
 
     // Pagination on threads
     const page1 = (
