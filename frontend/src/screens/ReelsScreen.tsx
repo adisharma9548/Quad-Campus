@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import {
   Play,
+  Pause,
   Volume2,
   VolumeX,
   Heart,
@@ -33,9 +34,14 @@ import {
   Skeleton,
 } from '../components/ui';
 
-interface ReelCardProps {
+export interface ReelCardControls {
+  togglePlay: () => void;
+  seekBy: (deltaSec: number) => void;
+}
+
+export interface ReelCardProps {
   reel: import('../types/quad').ReelItem;
-  slideRef: (el: HTMLDivElement | null) => void;
+  slideRef?: (el: HTMLDivElement | null) => void;
   isInView: boolean;
   isMuted: boolean;
   onToggleMute: () => void;
@@ -46,10 +52,11 @@ interface ReelCardProps {
   onOpenComments: (reel: import('../types/quad').ReelItem) => void;
   onShare: (reel: import('../types/quad').ReelItem) => void;
   shareCountOffset?: number;
+  onRegisterControls?: (id: string | number, controls: ReelCardControls | null) => void;
 }
 
 /* ─── Individual 9:16 Reel Player Card ─── */
-function ReelCard({
+export function ReelCard({
   reel,
   slideRef,
   isInView,
@@ -62,9 +69,11 @@ function ReelCard({
   onOpenComments,
   onShare,
   shareCountOffset = 0,
+  onRegisterControls,
 }: ReelCardProps) {
   const shouldReduceMotion = useReducedMotion();
   const [userPaused, setUserPaused] = useState(false);
+  const [flashIcon, setFlashIcon] = useState<'play' | 'pause' | null>(null);
   const [showHeartPop, setShowHeartPop] = useState(false);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [videoDurationSec, setVideoDurationSec] = useState<number | null>(
@@ -75,8 +84,11 @@ function ReelCard({
   const [videoLoadedData, setVideoLoadedData] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [videoError, setVideoError] = useState(false);
+  const [isDraggingSeek, setIsDraggingSeek] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bgVideoRef = useRef<HTMLVideoElement | null>(null);
+  const seekTrackRef = useRef<HTMLDivElement | null>(null);
+  const flashTimerRef = useRef<number | null>(null);
   const lastTapRef = useRef(0);
 
   const isProcessing = reel.status === 'processing';
@@ -157,11 +169,86 @@ function ReelCard({
       const resetTimer = setTimeout(() => {
         setUserPaused(false);
         setIsBuffering(false);
+        setFlashIcon(null);
       }, 0);
       return () => clearTimeout(resetTimer);
     }
     return undefined;
   }, [isInView]);
+
+  const triggerFlashIcon = useCallback((kind: 'play' | 'pause') => {
+    if (flashTimerRef.current) {
+      window.clearTimeout(flashTimerRef.current);
+    }
+    setFlashIcon(kind);
+    flashTimerRef.current = window.setTimeout(() => {
+      setFlashIcon(null);
+      flashTimerRef.current = null;
+    }, 450);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+    };
+  }, []);
+
+  const togglePlayPause = useCallback(() => {
+    if (!hasRealVideo || videoError) return;
+    setUserPaused((prev) => {
+      const nextPaused = !prev;
+      triggerFlashIcon(nextPaused ? 'pause' : 'play');
+      return nextPaused;
+    });
+  }, [hasRealVideo, triggerFlashIcon, videoError]);
+
+  const seekToTime = useCallback(
+    (targetTime: number) => {
+      const v = videoRef.current;
+      if (!hasRealVideo || !v) return;
+      const maxDur =
+        Number.isFinite(v.duration) && v.duration > 0 ? v.duration : totalSec;
+      if (maxDur <= 0) return;
+      const clamped = Math.max(0, Math.min(maxDur, targetTime));
+      v.currentTime = clamped;
+      if (bgVideoRef.current) {
+        bgVideoRef.current.currentTime = clamped;
+      }
+      setCurrentTimeSec(clamped);
+    },
+    [hasRealVideo, totalSec]
+  );
+
+  const seekBy = useCallback(
+    (deltaSec: number) => {
+      const v = videoRef.current;
+      if (!hasRealVideo || !v) return;
+      seekToTime(v.currentTime + deltaSec);
+    },
+    [hasRealVideo, seekToTime]
+  );
+
+  const seekFromClientX = useCallback(
+    (clientX: number) => {
+      const track = seekTrackRef.current;
+      const v = videoRef.current;
+      if (!track || !hasRealVideo || !v) return;
+      const rect = track.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const maxDur =
+        Number.isFinite(v.duration) && v.duration > 0 ? v.duration : totalSec;
+      if (maxDur <= 0) return;
+      seekToTime(ratio * maxDur);
+    },
+    [hasRealVideo, seekToTime, totalSec]
+  );
+
+  useEffect(() => {
+    if (!onRegisterControls) return undefined;
+    onRegisterControls(reel.id, { togglePlay: togglePlayPause, seekBy });
+    return () => onRegisterControls(reel.id, null);
+  }, [onRegisterControls, reel.id, seekBy, togglePlayPause]);
 
   const handleRetryVideo = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -181,15 +268,14 @@ function ReelCard({
     e.stopPropagation();
     if (!hasRealVideo || videoError) return;
     const now = Date.now();
-    if (now - lastTapRef.current < 300) {
+    if (now - lastTapRef.current < 280) {
       if (!liked) onToggleLike(reel.id);
       if (!shouldReduceMotion) {
         setShowHeartPop(true);
         setTimeout(() => setShowHeartPop(false), 600);
       }
-    } else {
-      setUserPaused((prev) => !prev);
     }
+    togglePlayPause();
     lastTapRef.current = now;
   };
 
@@ -198,7 +284,7 @@ function ReelCard({
       ref={slideRef}
       data-reel-id={reel.id}
       onContextMenu={(e) => e.preventDefault()}
-      className="h-full max-h-full aspect-[9/16] max-w-full rounded-[16px] bg-canvas border border-ink/12 overflow-hidden relative flex flex-col justify-between p-4 select-none text-ink"
+      className="h-full max-h-full aspect-[9/16] max-w-full rounded-[16px] bg-canvas border border-ink/12 overflow-hidden relative flex flex-col justify-between p-4 pb-6 select-none text-ink"
     >
       {/* Interactive Video Stage (prevents native right-click video menu) */}
       <div
@@ -216,9 +302,7 @@ function ReelCard({
         onKeyDown={(e) => {
           if (e.key === ' ' || e.key === 'Enter') {
             e.preventDefault();
-            if (hasRealVideo && !videoError) {
-              setUserPaused((prev) => !prev);
-            }
+            togglePlayPause();
           }
         }}
         className="absolute inset-0 bg-ink/6 cursor-pointer overflow-hidden flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -377,6 +461,38 @@ function ReelCard({
             >
               <div className="w-16 h-16 rounded-full bg-canvas border border-ink/12 text-ink flex items-center justify-center">
                 <Play size={24} fill="currentColor" />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Play / Pause Center Flash Feedback */}
+        <AnimatePresence>
+          {hasRealVideo && !videoError && flashIcon === 'play' && (
+            <motion.div
+              key="flash-play"
+              initial={shouldReduceMotion ? { opacity: 1 } : { scale: 0.75, opacity: 0 }}
+              animate={shouldReduceMotion ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+              exit={{ scale: 1.15, opacity: 0 }}
+              transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
+              className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
+            >
+              <div className="w-16 h-16 rounded-full bg-canvas/90 border border-ink/12 text-ink flex items-center justify-center">
+                <Play size={24} fill="currentColor" />
+              </div>
+            </motion.div>
+          )}
+          {hasRealVideo && !videoError && flashIcon === 'pause' && (
+            <motion.div
+              key="flash-pause"
+              initial={shouldReduceMotion ? { opacity: 1 } : { scale: 0.75, opacity: 0 }}
+              animate={shouldReduceMotion ? { opacity: 1 } : { scale: 1, opacity: 1 }}
+              exit={{ scale: 1.15, opacity: 0 }}
+              transition={{ duration: shouldReduceMotion ? 0 : 0.2 }}
+              className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
+            >
+              <div className="w-16 h-16 rounded-full bg-canvas/90 border border-ink/12 text-ink flex items-center justify-center">
+                <Pause size={24} fill="currentColor" />
               </div>
             </motion.div>
           )}
@@ -545,22 +661,96 @@ function ReelCard({
         </div>
       </div>
 
-      {/* Bottom Playback Progress Bar */}
+      {/* Interactive Seek Bar */}
       <div
-        role="progressbar"
-        aria-label="Reel playback progress"
-        aria-valuenow={Math.round(progress)}
+        ref={seekTrackRef}
+        role="slider"
+        tabIndex={hasRealVideo && totalSec > 0 ? 0 : -1}
+        aria-label="Seek reel playback position"
         aria-valuemin={0}
-        aria-valuemax={100}
-        className="absolute inset-x-0 bottom-0 h-1 bg-ink/12 overflow-hidden pointer-events-none z-20"
+        aria-valuemax={Math.max(0, Math.round(totalSec))}
+        aria-valuenow={Math.round(currentTimeSec)}
+        aria-valuetext={`${formatPlaybackSeconds(currentTimeSec)}${durationBadgeLabel ? ` of ${durationBadgeLabel}` : ''}`}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => {
+          if (!hasRealVideo || totalSec <= 0) return;
+          e.stopPropagation();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          setIsDraggingSeek(true);
+          seekFromClientX(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (!isDraggingSeek) return;
+          e.stopPropagation();
+          seekFromClientX(e.clientX);
+        }}
+        onPointerUp={(e) => {
+          if (!isDraggingSeek) return;
+          e.stopPropagation();
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
+          setIsDraggingSeek(false);
+        }}
+        onPointerCancel={() => setIsDraggingSeek(false)}
+        onKeyDown={(e) => {
+          if (!hasRealVideo || totalSec <= 0) return;
+          if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            e.stopPropagation();
+            seekBy(-5);
+          } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            e.stopPropagation();
+            seekBy(5);
+          } else if (e.key === 'Home') {
+            e.preventDefault();
+            e.stopPropagation();
+            seekToTime(0);
+          } else if (e.key === 'End') {
+            e.preventDefault();
+            e.stopPropagation();
+            seekToTime(totalSec);
+          }
+        }}
+        className={`group absolute inset-x-0 bottom-0 h-6 flex items-end z-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          hasRealVideo && totalSec > 0 ? 'cursor-pointer' : 'pointer-events-none'
+        }`}
       >
         <div
-          className="h-full bg-accent"
-          style={{ width: `${progress}%` }}
-        />
+          className={`w-full bg-ink/16 relative transition-[height] duration-150 ${
+            isDraggingSeek ? 'h-2' : 'h-1.5 group-hover:h-2'
+          }`}
+        >
+          <div
+            className="h-full bg-accent relative"
+            style={{ width: `${progress}%` }}
+          >
+            {hasRealVideo && totalSec > 0 && (
+              <span
+                className={`absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 rounded-full bg-canvas border-2 border-accent transition-opacity duration-150 ${
+                  isDraggingSeek ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100'
+                }`}
+              />
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
+}
+
+const REEL_MUTE_STORAGE_KEY = 'quad_reels_muted';
+
+function readInitialSessionMute(): boolean {
+  try {
+    const stored = window.sessionStorage.getItem(REEL_MUTE_STORAGE_KEY);
+    if (stored === 'false') return false;
+    if (stored === 'true') return true;
+  } catch {
+    // ignore storage access issues
+  }
+  return true;
 }
 
 /* ─── Dedicated Campus Reels Screen ─── */
@@ -578,7 +768,7 @@ export default function ReelsScreen({
     reels[0]?.id ?? null
   );
   const [isPageVisible, setIsPageVisible] = useState(true);
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState<boolean>(readInitialSessionMute);
   const [savedMap, setSavedMap] = useState<Record<string | number, boolean>>({});
   const [shareCountMap, setShareCountMap] = useState<Record<string | number, number>>({});
   const [commentReel, setCommentReel] = useState<import('../types/quad').ReelItem | null>(null);
@@ -588,13 +778,35 @@ export default function ReelsScreen({
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const slideRefs = useRef<Record<string | number, HTMLDivElement | null>>({});
+  const cardControlsRef = useRef<Record<string, ReelCardControls>>({});
+
+  const registerCardControls = useCallback(
+    (id: string | number, controls: ReelCardControls | null) => {
+      const key = String(id);
+      if (controls) {
+        cardControlsRef.current[key] = controls;
+      } else {
+        delete cardControlsRef.current[key];
+      }
+    },
+    []
+  );
+
+  // Persist mute preference for this browser session across reels
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(REEL_MUTE_STORAGE_KEY, String(isMuted));
+    } catch {
+      // ignore storage errors
+    }
+  }, [isMuted]);
 
   // Clear unseen badge once user opens the Reels screen
   useEffect(() => {
     markReelsSeen?.();
   }, [markReelsSeen]);
 
-  // Pause simulated playback if browser tab leaves foreground
+  // Pause active playback if browser tab leaves foreground
   useEffect(() => {
     const handleVisibility = () => {
       setIsPageVisible(!document.hidden);
@@ -649,27 +861,47 @@ export default function ReelsScreen({
     [reels, shouldReduceMotion]
   );
 
-  // Keyboard navigation (ArrowUp/ArrowDown/J/K/M)
+  const activeReelId = visibleReelId ?? reels[0]?.id ?? null;
+
+  // Keyboard shortcuts (Space, M, ArrowLeft/Right +-5s, ArrowUp/Down/J/K)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (commentReel) return;
-      const activeIdx = reels.findIndex((r) => String(r.id) === String(visibleReelId));
-      const current = activeIdx >= 0 ? activeIdx : 0;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+        return;
+      }
 
-      if (['ArrowDown', 'j', 'J'].includes(e.key)) {
+      const activeIdx = reels.findIndex((r) => String(r.id) === String(activeReelId));
+      const current = activeIdx >= 0 ? activeIdx : 0;
+      const activeControls = activeReelId !== null ? cardControlsRef.current[String(activeReelId)] : undefined;
+
+      if (e.key === ' ') {
+        if (tag === 'BUTTON' && target?.getAttribute('role') !== 'button') return;
+        e.preventDefault();
+        activeControls?.togglePlay();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        activeControls?.seekBy(-5);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        activeControls?.seekBy(5);
+      } else if (['ArrowDown', 'j', 'J'].includes(e.key)) {
         e.preventDefault();
         if (current < reels.length - 1) scrollToIndex(current + 1);
       } else if (['ArrowUp', 'k', 'K'].includes(e.key)) {
         e.preventDefault();
         if (current > 0) scrollToIndex(current - 1);
       } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
         setIsMuted((prev) => !prev);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commentReel, reels, visibleReelId, scrollToIndex]);
+  }, [activeReelId, commentReel, reels, scrollToIndex]);
 
   const toggleLike = async (id: string | number) => {
     await toggleReelLike(id);
@@ -778,7 +1010,7 @@ export default function ReelsScreen({
               slideRef={(el) => {
                 slideRefs.current[reel.id] = el;
               }}
-              isInView={isPageVisible && String(visibleReelId ?? reels[0]?.id ?? '') === String(reel.id)}
+              isInView={isPageVisible && String(activeReelId ?? '') === String(reel.id)}
               isMuted={isMuted}
               onToggleMute={() => setIsMuted((prev) => !prev)}
               liked={Boolean(reel.isLiked)}
@@ -788,6 +1020,7 @@ export default function ReelsScreen({
               onOpenComments={(r) => setCommentReel(r)}
               onShare={handleShare}
               shareCountOffset={shareCountMap[reel.id] || 0}
+              onRegisterControls={registerCardControls}
             />
           </div>
         ))}
