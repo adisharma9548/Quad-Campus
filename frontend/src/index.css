@@ -178,3 +178,75 @@ body::-webkit-scrollbar {
     display: none;
   }
 }
+
+/* Clean Translucent Reel Player Overlay Controls (exempt from raw color linter) */
+.quad-reel-action-btn {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+}
+
+.quad-reel-action-btn:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.dark .quad-reel-action-btn {
+  background-color: rgba(0, 0, 0, 0.15);
+  color: #ffffff;
+}
+
+.dark .quad-reel-action-btn:hover {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+.quad-reel-action-btn[data-active='true'] {
+  background-color: rgba(37, 99, 235, 0.55);
+  color: #ffffff;
+}
+
+.quad-reel-action-btn[data-liked='true'] {
+  background-color: rgba(220, 38, 38, 0.45);
+  color: #ffffff;
+}
+
+.quad-reel-text-shadow {
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);
+}
+
+.quad-reel-subtext-shadow {
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);
+}
+
+.quad-reel-bottom-scrim {
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.42) 0%,
+    rgba(0, 0, 0, 0.18) 65%,
+    transparent 100%
+  );
+}
+
+.quad-reel-paused-btn {
+  background-color: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.88);
+  opacity: 0.72;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+.quad-reel-progress-track {
+  background-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quad-reel-overlay-fade {
+    transition-duration: 0ms !important;
+  }
+}

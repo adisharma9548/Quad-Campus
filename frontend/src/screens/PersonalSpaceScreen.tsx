@@ -39,9 +39,11 @@ const REEL_MUTE_STORAGE_KEY = 'quad_reels_muted';
 export default function PersonalSpaceScreen({
   onNavigate,
   onOpenCreateReel,
+  onOpenPeerProfile,
 }: {
   onNavigate: (screen: string) => void;
   onOpenCreateReel?: () => void;
+  onOpenPeerProfile?: (username: string, fallbackPeer?: import('../types/quad').PeerUser) => void;
 }) {
   const { state, toggleProfileVisibility, togglePostLike, toggleReelLike, deleteReel } = useApp();
   const institution = useInstitution();
@@ -562,6 +564,7 @@ export default function PersonalSpaceScreen({
                 onOpenComments={() => {
                   showToast('Open Campus Reels to read or post comments on this reel', 'info');
                 }}
+                onOpenProfile={onOpenPeerProfile}
                 onShare={(reel) => {
                   const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
                     String(reel.id)

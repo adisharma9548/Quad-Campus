@@ -70,6 +70,7 @@ export interface PostItem {
 
 export interface ReelItem {
   id: string | number;
+  authorId?: string;
   username: string;
   initials: string;
   branch?: string;
