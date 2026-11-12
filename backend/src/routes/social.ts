@@ -1199,6 +1199,7 @@ export function registerSocialRoutes(
         branch: String(request.query?.branch || 'all'),
         year: String(request.query?.year || 'all'),
         limit: Number(request.query?.limit || 30),
+        excludeConnected: false,
       });
 
       return { items };
@@ -1214,6 +1215,7 @@ export function registerSocialRoutes(
         branch: String(request.query?.branch || 'all'),
         year: String(request.query?.year || 'all'),
         limit: Number(request.query?.limit || 3),
+        excludeConnected: true,
       });
 
       return { items };

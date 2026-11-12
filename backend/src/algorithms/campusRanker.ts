@@ -362,6 +362,7 @@ export interface RankPeersOptions {
   branchFilter?: string;
   yearFilter?: string;
   limit?: number;
+  excludeFollowingAndRequested?: boolean;
 }
 
 /**
@@ -376,6 +377,7 @@ export function rankDiscoverablePeers({
   branchFilter = 'all',
   yearFilter = 'all',
   limit = 20,
+  excludeFollowingAndRequested = true,
 }: RankPeersOptions): RankedPeerItem[] {
   const cleanQuery = (query || '').trim().toLowerCase();
   const viewerInterests = Array.isArray(viewer?.interests) ? viewer.interests : [];
@@ -405,11 +407,13 @@ export function rankDiscoverablePeers({
     if (viewer && peer.id === viewer.id) continue;
     if (!peer.discoverable) continue;
     if (relations.blockedIds.has(peer.id) || relations.blockedByIds.has(peer.id)) continue;
-    if (relations.followingIds.has(peer.id)) continue;
-    if (
+
+    const isFollowing = relations.followingIds.has(peer.id);
+    const isRequested =
       relations.outgoingRequestTargetIds.has(peer.id) ||
-      relations.incomingRequestRequesterIds?.has(peer.id)
-    ) {
+      Boolean(relations.incomingRequestRequesterIds?.has(peer.id));
+
+    if (excludeFollowingAndRequested && (isFollowing || isRequested)) {
       continue;
     }
 
@@ -439,8 +443,8 @@ export function rankDiscoverablePeers({
       branch: peer.branch,
       year: peerYearShort,
       bio: peer.bio || '',
-      isFollowing: false,
-      isRequested: false,
+      isFollowing,
+      isRequested,
       score,
     });
   }

@@ -665,7 +665,7 @@ export function registerAuthRoutes(
   );
 
   // ── 12. Discovery Profile Page Lookup (GET /api/v1/users/:username/profile) ─
-  app.get<{ Params: { username: string } }>(
+  app.get<{ Params: { username: string }; Querystring: { context?: string } }>(
     '/api/v1/users/:username/profile',
     { preHandler: auth.requireAuth },
     async (request, reply) => {
@@ -689,8 +689,8 @@ export function registerAuthRoutes(
       const isRequested = relations.outgoingRequestTargetIds.has(target.id);
       const isIncomingRequested = Boolean(relations.incomingRequestRequesterIds?.has(target.id));
 
-      // Enforce Directory visibility on the server for discovery profile lookups
-      if (!isSelf && !isFollowing && !target.discoverable) {
+      // Discovery lookups hide directoryVisible=false users; Feed/Thread profile visits still show public content.
+      if (request.query?.context === 'discovery' && !isSelf && !isFollowing && !target.discoverable) {
         return apiError(reply, 404, 'USER_NOT_FOUND', 'Student profile unavailable.');
       }
 

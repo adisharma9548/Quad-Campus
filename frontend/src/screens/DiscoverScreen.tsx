@@ -91,33 +91,39 @@ export default function DiscoverScreen({
     return list;
   }, [institution.years]);
 
-  // Single source of truth mirror: strictly opted-in, deduplicated peers excluding self,
-  // already followed, blocked, or pending follow requests.
+  // Single source of truth mirror: strictly opted-in, deduplicated peers excluding self & blocks.
+  // Directory keeps showing connected peers with their Following / Requested state;
+  // Who to follow excludes already-followed and pending-request peers.
   // Importantly: Viewer's own Directory OFF setting NEVER blocks browsing others.
   const discoverableUsers = useMemo(() => {
     const raw = state.discoverableUsers || [];
     const seen = new Set<string>();
     const blockedSet = new Set((state.blockedUsers || []).map((b) => b.username.toLowerCase()));
     const followingSet = new Set((state.following || []).map((f) => f.username.toLowerCase()));
-    const incomingReqSet = new Set((state.followRequests || []).map((r) => r.username.toLowerCase()));
     const selfHandle = (state.username || '').toLowerCase();
 
-    return raw.filter((u) => {
-      const handle = (u.username || '').toLowerCase();
-      if (!handle || seen.has(handle)) return false;
-      seen.add(handle);
-      if (selfHandle && handle === selfHandle) return false;
-      if (u.directoryVisible === false || u.discoverable === false) return false;
-      if (u.isFollowing || followingSet.has(handle)) return false;
-      if (u.isRequested || requestedUsernames.has(handle) || incomingReqSet.has(handle)) return false;
-      if (blockedSet.has(handle)) return false;
-      return true;
-    });
+    return raw
+      .filter((u) => {
+        const handle = (u.username || '').toLowerCase();
+        if (!handle || seen.has(handle)) return false;
+        seen.add(handle);
+        if (selfHandle && handle === selfHandle) return false;
+        if (u.directoryVisible === false || u.discoverable === false) return false;
+        if (blockedSet.has(handle)) return false;
+        return true;
+      })
+      .map((u) => {
+        const handle = (u.username || '').toLowerCase();
+        return {
+          ...u,
+          isFollowing: Boolean(u.isFollowing) || followingSet.has(handle),
+          isRequested: Boolean(u.isRequested) || requestedUsernames.has(handle),
+        };
+      });
   }, [
     state.discoverableUsers,
     state.blockedUsers,
     state.following,
-    state.followRequests,
     state.username,
     requestedUsernames,
   ]);
@@ -346,7 +352,7 @@ export default function DiscoverScreen({
             description={
               hasActiveFilters
                 ? 'Try clearing your search or branch and year filters to view more opted-in peers.'
-                : 'You already follow or have pending requests with everyone currently opted into the Directory.'
+                : 'No verified students currently have Directory visibility turned on.'
             }
             action={
               hasActiveFilters ? (

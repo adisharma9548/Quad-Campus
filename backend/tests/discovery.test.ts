@@ -119,13 +119,20 @@ describe('Part 2: Directory & Who to follow Single Source of Truth', () => {
     assert.equal(searchForA.statusCode, 200);
     assert.equal((searchForA.json().items as unknown[]).length, 0);
 
-    // Discovery profile lookup must block hidden user C
+    // Discovery profile lookup must block hidden user C; direct Feed/Thread visit shows public content only
     const profileCForB = await app.inject({
+      method: 'GET',
+      url: '/api/v1/users/user_c/profile?context=discovery',
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+    assert.equal(profileCForB.statusCode, 404);
+
+    const directProfileCForB = await app.inject({
       method: 'GET',
       url: '/api/v1/users/user_c/profile',
       headers: { authorization: `Bearer ${tokenB}` },
     });
-    assert.equal(profileCForB.statusCode, 404);
+    assert.equal(directProfileCForB.statusCode, 200);
   });
 
   test('User C (Directory OFF) can still browse User A in Directory, Who to follow, and profile lookup', async () => {
@@ -175,8 +182,8 @@ describe('Part 2: Directory & Who to follow Single Source of Truth', () => {
     assert.equal(body.personalPosts.length, 0, 'Private personal space must remain hidden to non-followers');
   });
 
-  test('Excludes pending follow requests, accepted follows, and blocks from both Directory and Who to follow', async () => {
-    // C requests to follow B -> B must disappear from C's Directory & Who to follow immediately
+  test('Who to follow excludes pending & accepted follows while Directory retains them with status; blocks exclude from both', async () => {
+    // C requests to follow B -> B leaves Who to follow immediately, stays in Directory with isRequested: true
     const reqRes = await app.inject({
       method: 'POST',
       url: '/api/v1/follow-requests',
@@ -195,11 +202,12 @@ describe('Part 2: Directory & Who to follow Single Source of Truth', () => {
       url: '/api/v1/who-to-follow?limit=20',
       headers: { authorization: `Bearer ${tokenC}` },
     });
-    assert.ok(!(dirAfterReq.json().items as Array<{ username: string }>).some((u) => u.username === 'user_b'));
-    assert.ok(!(wtfAfterReq.json().items as Array<{ username: string }>).some((u) => u.username === 'user_b'));
-    // Note: B also shouldn't see C anyway (C is Directory OFF), and if B accepts, C won't see B in discovery either.
+    const dirBReq = (dirAfterReq.json().items as Array<{ username: string; isRequested?: boolean }>).find((u) => u.username === 'user_b');
+    assert.ok(dirBReq, 'Directory keeps showing discoverable peer B with requested status');
+    assert.equal(dirBReq?.isRequested, true);
+    assert.ok(!(wtfAfterReq.json().items as Array<{ username: string }>).some((u) => u.username === 'user_b'), 'Who to follow must exclude pending requests');
 
-    // Check overview on B to find pending request id, accept it -> B stays excluded from C's discovery
+    // Check overview on B to find pending request id, accept it -> B stays in Directory with isFollowing: true and excluded from Who to follow
     const ovB = await app.inject({
       method: 'GET',
       url: '/api/v1/social/overview',
@@ -227,8 +235,10 @@ describe('Part 2: Directory & Who to follow Single Source of Truth', () => {
       url: '/api/v1/who-to-follow?limit=20',
       headers: { authorization: `Bearer ${tokenC}` },
     });
-    assert.ok(!(dirAfterAccept.json().items as Array<{ username: string }>).some((u) => u.username === 'user_b'));
-    assert.ok(!(wtfAfterAccept.json().items as Array<{ username: string }>).some((u) => u.username === 'user_b'));
+    const dirBAccepted = (dirAfterAccept.json().items as Array<{ username: string; isFollowing?: boolean }>).find((u) => u.username === 'user_b');
+    assert.ok(dirBAccepted, 'Directory keeps showing followed discoverable peer B');
+    assert.equal(dirBAccepted?.isFollowing, true);
+    assert.ok(!(wtfAfterAccept.json().items as Array<{ username: string }>).some((u) => u.username === 'user_b'), 'Who to follow must exclude followed peers');
 
     // Blocking User A excludes A bidirectionally from Directory and Who to follow
     const blockRes = await app.inject({

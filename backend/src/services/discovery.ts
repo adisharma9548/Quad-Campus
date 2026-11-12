@@ -8,6 +8,7 @@ export interface DiscoverableUsersFilters {
   branch?: string;
   year?: string;
   limit?: number;
+  excludeConnected?: boolean;
 }
 
 export interface DiscoverableUserItem extends RankedPeerItem {
@@ -105,6 +106,7 @@ export function getDiscoverableUsers(
     branchFilter: String(filters.branch || 'all') || 'all',
     yearFilter: String(filters.year || 'all') || 'all',
     limit: Math.max(1, Math.min(100, Number(filters.limit || 30))),
+    excludeFollowingAndRequested: filters.excludeConnected !== false,
   });
 
   return ranked.map((item) => ({
