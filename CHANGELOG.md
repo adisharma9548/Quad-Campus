@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.7.1 (WIP — Reels Improvements Needed)
+
+> [!NOTE]
+> **Reels Status**: Core playback, FFmpeg transcoding, seek/keyboard controls, and Personal Space management are implemented, **but the Reels experience still needs further changes and improvements** (listed below) before final release.
+
+### Fixes & Improvements Included
+- **Layout (Part 1)**: Widened 3-column container up to 1600px (`240px` left nav / flexible center / `340px` right rail) with sticky side panels, in-flow footer links, right panel hidden below `1100px`, and mobile bottom bar below `768px`.
+- **Directory & Who to Follow (Part 2)**: Unified single-source-of-truth filtering around `directoryVisible === true`, excluding self, accepted follows, bidirectional blocks, and pending requests from Who to follow while keeping browsing open for Directory-OFF students.
+- **Threads & Reporting (Parts 3–4)**: Verified nested replies (`@mention` replies work for Directory-OFF peers) and aligned comment report toast/non-hiding behavior with Feed.
+- **Reels Core Overhaul (Part 5)**:
+  - Removed mock/placeholder reels and unused SVG covers.
+  - Added server-side disk storage (`uploads/reels/`), `ffprobe` real duration/dimension detection, off-thread `ffmpeg` H.264/AAC transcoding (`1080×1920`, `-movflags +faststart`, `-map_metadata -1` GPS strip), and HTTP `206` byte-range streaming.
+  - Synced timeline (`0:xx / 0:yy`) and interactive seek slider with real video duration, blocked native video right-click menu, added cover fade + buffering/error retry, play/pause center flash, session mute persistence, and keyboard shortcuts (`Space`, `M`, `←`/`→`, `↑`/`↓`/`J`/`K`).
+  - Added `Reels` tab, grid, viewer modal, and deletion flow (with open-report moderation media retention) in Personal Space plus Peer Profile reels grid.
+- **Automated Tests (Part 6)**: Added FFmpeg/ffprobe transcode, range-request, metadata-strip, delete authorization, open-report retention, and peer-profile visibility tests (33/33 backend tests passing).
+
+### Reels — Needs Further Changes & Improvements
+- Make reel creator `@username` handles interactive to open the peer's profile modal directly from the Reels player.
+- Support full inline comment sheet inside Personal Space and Peer Profile reel viewer modals (currently points users to Campus Reels).
+- Support direct permalink routing (`/?screen=reels&reel=<id>`) so shared reel links jump straight to the target reel.
+- Polish reel upload retry/cancel UX, adaptive bitrate / preloading, and further UI/UX refinements requested next.
+
 ## 2.7.0
 
 ### Security and production readiness

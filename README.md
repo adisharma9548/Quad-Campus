@@ -2,6 +2,8 @@
 
 A privacy-first, non-addictive B.Tech campus social network split cleanly into `frontend/` (TypeScript + React 19 + Vite + Tailwind) and `backend/` (TypeScript + Fastify v5 + Node.js `node:sqlite`).
 
+> **v2.7.1 (WIP — Reels Improvements Needed)**: Fixed 3-column wide layout, unified Directory / Who to follow visibility, verified Threads nested replies & reporting, and overhauled Reels with FFmpeg H.264/AAC disk transcoding, `ffprobe` real durations, HTTP `206` streaming, interactive controls, and Personal Space reel management. **Note: Reels still requires further changes and improvements** (see [CHANGELOG.md](./CHANGELOG.md) and [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md)).
+>
 > **v2.7.0 Update**: Production-readiness release: white-label institution profile (presets, JSON override, open/allowlist/edu email policies), safer secrets and seeding, edit/delete own posts, search, notification bell, WCAG 2.1 AA colors and labels, self-hosted fonts, and global scrollbar-hidden UI. See [CHANGELOG.md](./CHANGELOG.md), [DEPLOYMENT.md](./DEPLOYMENT.md), and **[KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) (read before selling)**.
 >
 > **v2.6.0 Update**: Converted the entire `backend/` and `frontend/` codebase to strict TypeScript (`.ts` / `.tsx`) with typechecking via `tsc --noEmit` and Node v24 native `.ts` execution.
