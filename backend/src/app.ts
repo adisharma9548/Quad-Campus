@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -11,7 +14,9 @@ import {
   SEED_ADMIN_PASSWORD,
   SEED_ADMIN_PASSWORD_GENERATED,
   ADMIN_USERNAME,
+  UPLOAD_DIR,
 } from './config/constants.ts';
+import { assertMediaToolsAvailable } from './utils/videoProcessor.ts';
 import { publicInstitutionConfig } from './config/institution.ts';
 import { openDatabase } from './db/database.ts';
 import { seedDatabase } from './db/seed.ts';
@@ -23,18 +28,32 @@ import { registerAdminRoutes } from './routes/admin.ts';
 
 export interface BuildAppOptions {
   dbPath?: string;
+  uploadDir?: string;
   logger?: boolean;
 }
 
 export interface BuiltQuadApp {
   app: FastifyInstance;
   db: DatabaseSync;
+  uploadDir: string;
 }
 
 export async function buildApp({
   dbPath = DB_PATH,
+  uploadDir,
   logger = false,
 }: BuildAppOptions = {}): Promise<BuiltQuadApp> {
+  assertMediaToolsAvailable();
+
+  const resolvedUploadDir = uploadDir
+    ? path.resolve(uploadDir)
+    : dbPath === ':memory:'
+      ? fs.mkdtempSync(path.join(os.tmpdir(), 'quad-mem-uploads-'))
+      : dbPath !== DB_PATH
+        ? path.join(path.dirname(path.resolve(dbPath)), 'uploads')
+        : UPLOAD_DIR;
+  fs.mkdirSync(resolvedUploadDir, { recursive: true });
+
   const app = Fastify({
     logger,
     bodyLimit: SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES + 4 * 1024 * 1024,
@@ -80,8 +99,24 @@ export async function buildApp({
     );
   }
 
+  const pendingTasks = new Set<Promise<unknown>>();
+  let isClosing = false;
+  const trackBackgroundTask = (task: Promise<unknown>) => {
+    pendingTasks.add(task);
+    void task.finally(() => {
+      pendingTasks.delete(task);
+    });
+  };
+
   app.addHook('onClose', async () => {
+    isClosing = true;
+    if (pendingTasks.size > 0) {
+      await Promise.allSettled(Array.from(pendingTasks));
+    }
     db.close();
+    if (dbPath === ':memory:') {
+      fs.rmSync(resolvedUploadDir, { recursive: true, force: true });
+    }
   });
 
   const auth = createAuthMiddleware(db);
@@ -98,8 +133,12 @@ export async function buildApp({
 
   registerAuthRoutes(app, db, auth);
   registerFeedRoutes(app, db, auth);
-  registerSocialRoutes(app, db, auth);
+  registerSocialRoutes(app, db, auth, {
+    uploadDir: resolvedUploadDir,
+    trackBackgroundTask,
+    isAppClosing: () => isClosing,
+  });
   registerAdminRoutes(app, db, auth);
 
-  return { app, db };
+  return { app, db, uploadDir: resolvedUploadDir };
 }

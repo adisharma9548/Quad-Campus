@@ -1,10 +1,14 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 import type { PostType } from '../types.ts';
 import { loadInstitutionConfig } from './institution.ts';
 
 export const PORT: number = Number(process.env.PORT || 4000);
 export const HOST: string = process.env.HOST || '127.0.0.1';
 export const DB_PATH: string = process.env.DB_PATH || './data/quad.db';
+export const UPLOAD_DIR: string = path.resolve(process.env.UPLOAD_DIR || './uploads');
+export const FFMPEG_PATH: string = (process.env.FFMPEG_PATH || 'ffmpeg').trim() || 'ffmpeg';
+export const FFPROBE_PATH: string = (process.env.FFPROBE_PATH || 'ffprobe').trim() || 'ffprobe';
 export const NODE_ENV: string = process.env.NODE_ENV || 'development';
 export const IS_PRODUCTION: boolean = NODE_ENV === 'production';
 

@@ -489,7 +489,12 @@ export function rankCampusReels<T extends RankableReel>({
 }: RankReelsOptions<T>): Array<T & { score: number }> {
   const scored: Array<T & { score: number }> = [];
   for (const reel of reels) {
-    if (reel.status !== 'active' || reel.authorStatus === 'banned') continue;
+    const isOwner = Boolean(viewer && viewer.id === reel.authorId);
+    const isProcessingForOwner =
+      isOwner && (reel.status === 'processing' || reel.status === 'failed');
+    if ((reel.status !== 'active' && !isProcessingForOwner) || reel.authorStatus === 'banned') {
+      continue;
+    }
     if (relations.blockedIds.has(reel.authorId) || relations.blockedByIds.has(reel.authorId)) {
       continue;
     }

@@ -900,6 +900,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [state.branch, state.userInitials, state.username, state.year]
   );
 
+  // Poll any processing reels belonging to the uploader until FFmpeg transcode finishes
+  useEffect(() => {
+    if (!IS_REAL_BACKEND) return;
+    const processingIds = (state.reels || [])
+      .filter((r) => r.status === 'processing')
+      .map((r) => String(r.id));
+    if (processingIds.length === 0) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      for (const id of processingIds) {
+        if (cancelled) return;
+        try {
+          const updated = await apiRequest<AppReelItem>(`/reels/${encodeURIComponent(id)}`);
+          if (!cancelled && updated && updated.id) {
+            setState((prev) => ({
+              ...prev,
+              reels: (prev.reels || []).map((r) => (String(r.id) === String(id) ? { ...r, ...updated } : r)),
+            }));
+          }
+        } catch {
+          // ignore transient polling errors
+        }
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 1200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [state.reels]);
+
   const searchMentionUsers = useCallback(
     async (query: string): Promise<PeerUser[]> => {
       const q = query.trim().toLowerCase();

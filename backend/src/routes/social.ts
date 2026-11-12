@@ -1,7 +1,11 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
-import { SECURITY_LIMITS, SHORT_YEAR } from '../config/constants.ts';
+import { SECURITY_LIMITS, SHORT_YEAR, UPLOAD_DIR } from '../config/constants.ts';
 import {
   canViewerSeePost,
   rankCampusReels,
@@ -10,7 +14,13 @@ import { getDiscoverableUsers } from '../services/discovery.ts';
 import { checkRateLimit, formatRelativeTime, getViewerRelations } from '../middleware/auth.ts';
 import type { AuthMiddleware, PostSpace, PostStatus, ReelItem, UserRole, UserStatus } from '../types.ts';
 import { sanitizeUploadedImage, type MediaSanitizeError } from '../utils/exifStripper.ts';
-import { sanitizeUploadedVideo, type VideoSanitizeError } from '../utils/videoStripper.ts';
+import {
+  deleteReelUploadDir,
+  probeVideo,
+  resolveUploadPath,
+  streamDiskMediaFile,
+  transcodeReelVideo,
+} from '../utils/videoProcessor.ts';
 
 interface JoinedReelRow {
   id: string;
@@ -32,6 +42,12 @@ interface JoinedReelRow {
   poster_alt: string | null;
   media_id: string | null;
   cover_media_id: string | null;
+  video_path: string | null;
+  thumbnail_path: string | null;
+  cover_path: string | null;
+  width: number | null;
+  height: number | null;
+  processing_error: string | null;
   duration_sec: number | null;
   trim_start: number | null;
   trim_end: number | null;
@@ -93,25 +109,46 @@ interface ThreadReplyDto {
 }
 
 function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem[] {
-  const rows = db
-    .prepare(`
-      SELECT
-        r.*,
-        u.username,
-        u.avatar_initials AS initials,
-        u.branch,
-        u.year,
-        u.discoverable,
-        u.status AS author_status,
-        (SELECT COUNT(*) FROM reel_likes rl WHERE rl.reel_id = r.id) AS likes_count,
-        (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id) AS comments_count,
-        (SELECT COUNT(*) FROM reel_views rv WHERE rv.reel_id = r.id) AS views_count
-      FROM reels r
-      JOIN users u ON u.id = r.author_id
-      WHERE r.status = 'active'
-      ORDER BY r.created_at_ms DESC
-    `)
-    .all() as unknown as JoinedReelRow[];
+  const rows = viewerId
+    ? (db
+        .prepare(`
+          SELECT
+            r.*,
+            u.username,
+            u.avatar_initials AS initials,
+            u.branch,
+            u.year,
+            u.discoverable,
+            u.status AS author_status,
+            (SELECT COUNT(*) FROM reel_likes rl WHERE rl.reel_id = r.id) AS likes_count,
+            (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id) AS comments_count,
+            (SELECT COUNT(*) FROM reel_views rv WHERE rv.reel_id = r.id) AS views_count
+          FROM reels r
+          JOIN users u ON u.id = r.author_id
+          WHERE r.status = 'active'
+             OR (r.status IN ('processing', 'failed') AND r.author_id = ?)
+          ORDER BY r.created_at_ms DESC
+        `)
+        .all(viewerId) as unknown as JoinedReelRow[])
+    : (db
+        .prepare(`
+          SELECT
+            r.*,
+            u.username,
+            u.avatar_initials AS initials,
+            u.branch,
+            u.year,
+            u.discoverable,
+            u.status AS author_status,
+            (SELECT COUNT(*) FROM reel_likes rl WHERE rl.reel_id = r.id) AS likes_count,
+            (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id) AS comments_count,
+            (SELECT COUNT(*) FROM reel_views rv WHERE rv.reel_id = r.id) AS views_count
+          FROM reels r
+          JOIN users u ON u.id = r.author_id
+          WHERE r.status = 'active'
+          ORDER BY r.created_at_ms DESC
+        `)
+        .all() as unknown as JoinedReelRow[]);
 
   const viewedIds = new Set<string>();
   const likedIds = new Set<string>();
@@ -142,11 +179,37 @@ function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem
     } catch {
       parsedHashtags = [];
     }
-    const mediaUrl = r.media_id ? `/api/v1/media/${r.media_id}` : '';
-    const coverUrl = r.cover_media_id ? `/api/v1/media/${r.cover_media_id}` : '';
-    const durationSec = Number(r.duration_sec ?? 30);
+
+    const durationSec =
+      r.duration_sec !== null && r.duration_sec !== undefined && Number(r.duration_sec) > 0
+        ? Number(r.duration_sec)
+        : null;
+    const duration =
+      durationSec !== null ? formatDurationClock(durationSec) : r.duration && r.status === 'active' ? r.duration : '';
+
+    const videoUrl = r.video_path
+      ? `/api/v1/reels/${r.id}/video`
+      : r.media_id
+        ? `/api/v1/media/${r.media_id}`
+        : '';
+    const thumbnailUrl = r.thumbnail_path
+      ? `/api/v1/reels/${r.id}/thumbnail`
+      : r.cover_path
+        ? `/api/v1/reels/${r.id}/cover`
+        : r.cover_media_id
+          ? `/api/v1/media/${r.cover_media_id}`
+          : '';
+    const coverUrl = r.cover_path
+      ? `/api/v1/reels/${r.id}/cover`
+      : r.cover_media_id
+        ? `/api/v1/media/${r.cover_media_id}`
+        : thumbnailUrl;
+
     const trimStart = Number(r.trim_start ?? 0);
-    const trimEnd = Number(r.trim_end ?? durationSec);
+    const trimEnd =
+      r.trim_end !== null && r.trim_end !== undefined
+        ? Number(r.trim_end)
+        : durationSec;
 
     return {
       id: r.id,
@@ -156,7 +219,7 @@ function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem
       initials: r.initials,
       caption: r.caption,
       tag: r.tag,
-      duration: r.duration,
+      duration,
       branch: showAcademics ? r.branch : null,
       year: showAcademics ? SHORT_YEAR(r.year) : null,
       unseen: viewerId ? !viewedIds.has(r.id) : true,
@@ -170,18 +233,22 @@ function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem
       views: String(r.views_count || 0),
       posterKey: r.poster_key || 'robotics',
       posterAlt: r.poster_alt || `Campus reel by @${r.username}`,
-      mediaUrl,
-      videoUrl: mediaUrl,
+      mediaUrl: videoUrl,
+      videoUrl,
       coverUrl,
+      thumbnailUrl,
       durationSec,
       trimStart,
       trimEnd,
+      width: r.width ?? null,
+      height: r.height ?? null,
       fitMode: r.fit_mode === 'fit' ? 'fit' : 'crop',
       audience: r.audience === 'followers' ? 'followers' : 'campus',
       commentsEnabled: r.comments_enabled === undefined || r.comments_enabled === null ? true : Boolean(r.comments_enabled),
       mentions: parsedMentions,
       hashtags: parsedHashtags,
       status: r.status,
+      processingError: r.processing_error ?? null,
       createdAtMs: r.created_at_ms,
     };
   });
@@ -208,11 +275,62 @@ function extractTagsAndMentions(text: string): { hashtags: string[]; mentions: s
   return { hashtags, mentions };
 }
 
+export interface SocialRouteOptions {
+  uploadDir?: string;
+  trackBackgroundTask?: (task: Promise<unknown>) => void;
+  isAppClosing?: () => boolean;
+}
+
 export function registerSocialRoutes(
   app: FastifyInstance,
   db: DatabaseSync,
-  auth: AuthMiddleware
+  auth: AuthMiddleware,
+  options: SocialRouteOptions = {}
 ): void {
+  const uploadDir = options.uploadDir ? path.resolve(options.uploadDir) : UPLOAD_DIR;
+  const trackBackgroundTask = options.trackBackgroundTask || ((task: Promise<unknown>) => { void task; });
+  const isAppClosing = options.isAppClosing || (() => false);
+
+  const canViewerAccessReelMedia = (
+    reelRow: { id: string; author_id: string; status: string; audience: string | null },
+    viewerRow: { id: string; role?: UserRole } | null
+  ): boolean => {
+    if (reelRow.status === 'deleted') {
+      if (viewerRow?.role === 'admin') {
+        const pendingReport = db
+          .prepare("SELECT 1 FROM reports WHERE target_type = 'reel' AND target_id = ? AND status = 'pending' LIMIT 1")
+          .get(reelRow.id);
+        return Boolean(pendingReport);
+      }
+      return false;
+    }
+
+    if (reelRow.status === 'processing' || reelRow.status === 'failed') {
+      return Boolean(viewerRow && (viewerRow.id === reelRow.author_id || viewerRow.role === 'admin'));
+    }
+
+    if (reelRow.status !== 'active') return false;
+
+    const author = db
+      .prepare('SELECT status FROM users WHERE id = ?')
+      .get(reelRow.author_id) as { status: UserStatus } | undefined;
+    if (author?.status === 'banned' || author?.status === 'deleted') return false;
+
+    const relations = getViewerRelations(db, viewerRow?.id || null);
+    if (relations.blockedIds.has(reelRow.author_id) || relations.blockedByIds.has(reelRow.author_id)) {
+      return false;
+    }
+
+    if (reelRow.audience === 'followers') {
+      if (!viewerRow) return false;
+      if (viewerRow.id !== reelRow.author_id && viewerRow.role !== 'admin' && !relations.followingIds.has(reelRow.author_id)) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
   // ── 1. Reels (Ranked, Uploadable MP4/MOV, Paginated, Comments) ─────────
   const listReelsHandler = async (request: import('fastify').FastifyRequest) => {
     const query = (request.query || {}) as { limit?: string | number; offset?: string | number };
@@ -246,6 +364,29 @@ export function registerSocialRoutes(
   app.get('/api/v1/reels', { preHandler: auth.optionalAuth }, listReelsHandler);
   app.get('/api/reels', { preHandler: auth.optionalAuth }, listReelsHandler);
 
+  const getSingleReelHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string } }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const reelId = String(request.params.id);
+    const viewerRow = request.auth?.userRow || null;
+    const row = db
+      .prepare('SELECT id, author_id, status, audience FROM reels WHERE id = ?')
+      .get(reelId) as { id: string; author_id: string; status: string; audience: string | null } | undefined;
+    if (!row || !canViewerAccessReelMedia(row, viewerRow)) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+    }
+    const item = loadReelsWithStats(db, viewerRow?.id || null).find((r) => r.id === reelId);
+    if (!item) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+    }
+    const { authorId: _a, authorStatus: _s, ...publicReel } = item;
+    return publicReel;
+  };
+
+  app.get<{ Params: { id: string } }>('/api/v1/reels/:id', { preHandler: auth.optionalAuth }, getSingleReelHandler);
+  app.get<{ Params: { id: string } }>('/api/reels/:id', { preHandler: auth.optionalAuth }, getSingleReelHandler);
+
   const createReelHandler = async (
     request: import('fastify').FastifyRequest,
     reply: import('fastify').FastifyReply
@@ -259,288 +400,388 @@ export function registerSocialRoutes(
         mimetype?: string;
         filename?: string;
         value?: unknown;
+        file?: NodeJS.ReadableStream & { truncated?: boolean };
         toBuffer?: () => Promise<Buffer>;
       }>;
     };
 
+    const id = 'reel_' + crypto.randomUUID().slice(0, 10);
     let caption = '';
     let tag = 'Campus Reel';
-    let duration = '0:30';
-    let durationSec = 30;
     let trimStart = 0;
-    let trimEnd = 30;
+    let trimEnd = NaN;
     let fitMode: 'fit' | 'crop' = 'crop';
     let audience: 'campus' | 'followers' = 'campus';
     let commentsEnabled = true;
-    let videoBuffer: Buffer | null = null;
-    let videoMetaHint = '';
+    let rawVideoPath: string | null = null;
+    let videoTruncated = false;
     let coverBuffer: Buffer | null = null;
 
-    if (reqWithMultipart.isMultipart && reqWithMultipart.isMultipart() && reqWithMultipart.parts) {
-      for await (const part of reqWithMultipart.parts()) {
-        if (part.type === 'file') {
-          if (part.fieldname === 'video' && part.toBuffer) {
-            videoBuffer = await part.toBuffer();
-            videoMetaHint = `${part.mimetype || ''} ${part.filename || ''}`;
-          } else if (part.fieldname === 'cover' && part.toBuffer) {
-            coverBuffer = await part.toBuffer();
-          }
-        } else {
-          const val = String(part.value ?? '').trim();
-          switch (part.fieldname) {
-            case 'caption':
-              caption = val;
-              break;
-            case 'tag':
-              tag = val || tag;
-              break;
-            case 'duration':
-              duration = val || duration;
-              break;
-            case 'durationSec':
-              durationSec = Number(val);
-              break;
-            case 'trimStart':
-              trimStart = Number(val);
-              break;
-            case 'trimEnd':
-              trimEnd = Number(val);
-              break;
-            case 'fitMode':
-              fitMode = val === 'fit' ? 'fit' : 'crop';
-              break;
-            case 'audience':
-              audience = val === 'followers' ? 'followers' : 'campus';
-              break;
-            case 'commentsEnabled':
-              commentsEnabled = val !== 'false' && val !== '0';
-              break;
-            case 'coverDataUrl': {
-              const m = val.match(/^data:[^;]+;base64,(.+)$/);
-              if (m) coverBuffer = Buffer.from(m[1], 'base64');
-              break;
+    const cleanupTempUpload = async () => {
+      await deleteReelUploadDir(uploadDir, id).catch(() => {});
+    };
+
+    try {
+      if (reqWithMultipart.isMultipart && reqWithMultipart.isMultipart() && reqWithMultipart.parts) {
+        for await (const part of reqWithMultipart.parts()) {
+          if (part.type === 'file') {
+            if (part.fieldname === 'video') {
+              const extRaw = path.extname(String(part.filename || '')).toLowerCase();
+              const safeExt = ['.mp4', '.mov', '.m4v', '.webm'].includes(extRaw) ? extRaw : '.mp4';
+              const absDir = path.join(uploadDir, 'reels', id);
+              await fsp.mkdir(absDir, { recursive: true });
+              const targetPath = path.join(absDir, `raw${safeExt}`);
+              if (part.file) {
+                await pipeline(part.file, fs.createWriteStream(targetPath));
+                if (part.file.truncated) {
+                  videoTruncated = true;
+                }
+              } else if (part.toBuffer) {
+                const buf = await part.toBuffer();
+                await fsp.writeFile(targetPath, buf);
+              }
+              rawVideoPath = targetPath;
+            } else if (part.fieldname === 'cover' && part.toBuffer) {
+              coverBuffer = await part.toBuffer();
+            }
+          } else {
+            const val = String(part.value ?? '').trim();
+            switch (part.fieldname) {
+              case 'caption':
+                caption = val;
+                break;
+              case 'tag':
+                tag = val || tag;
+                break;
+              case 'trimStart':
+                trimStart = Number(val);
+                break;
+              case 'trimEnd':
+                trimEnd = Number(val);
+                break;
+              case 'fitMode':
+                fitMode = val === 'fit' ? 'fit' : 'crop';
+                break;
+              case 'audience':
+                audience = val === 'followers' ? 'followers' : 'campus';
+                break;
+              case 'commentsEnabled':
+                commentsEnabled = val !== 'false' && val !== '0';
+                break;
+              case 'coverDataUrl': {
+                const m = val.match(/^data:[^;]+;base64,(.+)$/);
+                if (m) coverBuffer = Buffer.from(m[1], 'base64');
+                break;
+              }
             }
           }
         }
+      } else {
+        const body = (request.body || {}) as Record<string, unknown>;
+        caption = String(body.caption || '').trim();
+        tag = String(body.tag || 'Campus Reel').trim().slice(0, 40) || 'Campus Reel';
+        if (body.trimStart !== undefined) trimStart = Number(body.trimStart);
+        if (body.trimEnd !== undefined) trimEnd = Number(body.trimEnd);
+        fitMode = body.fitMode === 'fit' ? 'fit' : 'crop';
+        audience = body.audience === 'followers' ? 'followers' : 'campus';
+        commentsEnabled = body.commentsEnabled === undefined ? true : Boolean(body.commentsEnabled);
       }
-    } else {
-      const body = (request.body || {}) as Record<string, unknown>;
-      caption = String(body.caption || '').trim();
-      tag = String(body.tag || 'Campus Reel').trim().slice(0, 40) || 'Campus Reel';
-      duration = String(body.duration || '0:30').trim().slice(0, 12);
-      if (body.durationSec !== undefined) durationSec = Number(body.durationSec);
-      if (body.trimStart !== undefined) trimStart = Number(body.trimStart);
-      if (body.trimEnd !== undefined) trimEnd = Number(body.trimEnd);
-      fitMode = body.fitMode === 'fit' ? 'fit' : 'crop';
-      audience = body.audience === 'followers' ? 'followers' : 'campus';
-      commentsEnabled = body.commentsEnabled === undefined ? true : Boolean(body.commentsEnabled);
-    }
 
-    if (!caption && !videoBuffer) {
-      return reply
-        .code(400)
-        .send({ error: { code: 'EMPTY_CAPTION', message: 'Reel caption or video is required.' } });
-    }
-    if (caption.length > SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS) {
-      return reply.code(400).send({
-        error: {
-          code: 'CAPTION_TOO_LONG',
-          message: `Caption exceeds maximum of ${SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS} characters.`,
-        },
-      });
-    }
-
-    let videoMediaId: string | null = null;
-    let coverMediaId: string | null = null;
-
-    if (videoBuffer) {
-      try {
-        const cleanedVideo = sanitizeUploadedVideo(
-          videoBuffer,
-          SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES,
-          videoMetaHint
-        );
-        const reportedOrParsedDuration =
-          cleanedVideo.parsedDurationSec !== null && cleanedVideo.parsedDurationSec > 0
-            ? cleanedVideo.parsedDurationSec
-            : Number.isFinite(durationSec) && durationSec > 0
-              ? durationSec
-              : 0;
-
-        if (
-          (Number.isFinite(durationSec) && durationSec > SECURITY_LIMITS.MAX_REEL_DURATION_SEC) ||
-          reportedOrParsedDuration > SECURITY_LIMITS.MAX_REEL_DURATION_SEC + 0.5
-        ) {
-          return reply.code(400).send({
-            error: {
-              code: 'VIDEO_TOO_LONG',
-              message: `Reels must be ${SECURITY_LIMITS.MAX_REEL_DURATION_SEC} seconds or shorter.`,
-            },
-          });
-        }
-
-        const effectiveDuration = reportedOrParsedDuration > 0 ? reportedOrParsedDuration : 30;
-        const safeTrimStart = Number.isFinite(trimStart) ? Math.max(0, trimStart) : 0;
-        const safeTrimEnd =
-          Number.isFinite(trimEnd) && trimEnd > safeTrimStart
-            ? Math.min(trimEnd, effectiveDuration)
-            : Math.min(effectiveDuration, SECURITY_LIMITS.MAX_REEL_DURATION_SEC);
-        const trimmedSpan = Math.max(0, safeTrimEnd - safeTrimStart);
-
-        if (trimmedSpan > SECURITY_LIMITS.MAX_REEL_DURATION_SEC + 0.5) {
-          return reply.code(400).send({
-            error: {
-              code: 'TRIM_TOO_LONG',
-              message: `Trimmed clip cannot exceed ${SECURITY_LIMITS.MAX_REEL_DURATION_SEC} seconds.`,
-            },
-          });
-        }
-        if (
-          effectiveDuration >= SECURITY_LIMITS.MIN_REEL_DURATION_SEC &&
-          trimmedSpan < SECURITY_LIMITS.MIN_REEL_DURATION_SEC - 0.1
-        ) {
-          return reply.code(400).send({
-            error: {
-              code: 'TRIM_TOO_SHORT',
-              message: `Reels must be at least ${SECURITY_LIMITS.MIN_REEL_DURATION_SEC} seconds long.`,
-            },
-          });
-        }
-
-        durationSec = trimmedSpan || effectiveDuration;
-        trimStart = safeTrimStart;
-        trimEnd = safeTrimEnd;
-        duration = formatDurationClock(durationSec);
-
-        videoMediaId = 'med_' + crypto.randomUUID().slice(0, 12);
-        db.prepare(`
-          INSERT INTO media_assets (id, uploader_id, mime_type, extension, data, exif_stripped, stripped_bytes, created_at)
-          VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-        `).run(
-          videoMediaId,
-          viewer.id,
-          cleanedVideo.mimeType,
-          cleanedVideo.extension,
-          cleanedVideo.buffer,
-          cleanedVideo.strippedBytes,
-          new Date().toISOString()
-        );
-      } catch (err) {
-        const vErr = err as Partial<VideoSanitizeError>;
-        return reply.code(vErr.status || 400).send({
+      if (videoTruncated) {
+        await cleanupTempUpload();
+        return reply.code(400).send({
           error: {
-            code: vErr.code || 'INVALID_VIDEO',
-            message: vErr.message || 'Uploaded video could not be processed.',
+            code: 'FILE_TOO_LARGE',
+            message: `Video exceeds maximum upload limit of ${Math.round(SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES / (1024 * 1024))} MB.`,
           },
         });
       }
-    } else {
-      if (!Number.isFinite(durationSec) || durationSec <= 0) durationSec = 30;
-      trimStart = Number.isFinite(trimStart) ? Math.max(0, trimStart) : 0;
-      trimEnd = Number.isFinite(trimEnd) && trimEnd > trimStart ? trimEnd : durationSec;
-    }
 
-    if (coverBuffer) {
-      try {
-        const cleanedCover = sanitizeUploadedImage(coverBuffer, SECURITY_LIMITS.MAX_UPLOAD_BYTES);
-        coverMediaId = 'med_' + crypto.randomUUID().slice(0, 12);
-        db.prepare(`
-          INSERT INTO media_assets (id, uploader_id, mime_type, extension, data, exif_stripped, stripped_bytes, created_at)
-          VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-        `).run(
-          coverMediaId,
-          viewer.id,
-          cleanedCover.mimeType,
-          cleanedCover.extension,
-          cleanedCover.buffer,
-          cleanedCover.strippedBytes,
-          new Date().toISOString()
-        );
-      } catch (err) {
-        const mediaErr = err as Partial<MediaSanitizeError>;
-        return reply.code(mediaErr.status || 400).send({
+      if (!rawVideoPath) {
+        await cleanupTempUpload();
+        return reply
+          .code(400)
+          .send({ error: { code: 'VIDEO_REQUIRED', message: 'Please upload a valid MP4 or MOV video for your reel.' } });
+      }
+
+      const rawStat = await fsp.stat(rawVideoPath);
+      if (rawStat.size <= 0 || rawStat.size > SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES) {
+        await cleanupTempUpload();
+        return reply.code(400).send({
           error: {
-            code: mediaErr.code || 'INVALID_COVER',
-            message: mediaErr.message || 'Cover image is invalid.',
+            code: rawStat.size <= 0 ? 'INVALID_VIDEO' : 'FILE_TOO_LARGE',
+            message:
+              rawStat.size <= 0
+                ? 'Uploaded video file is empty.'
+                : `Video exceeds maximum upload limit of ${Math.round(SECURITY_LIMITS.MAX_REEL_UPLOAD_BYTES / (1024 * 1024))} MB.`,
           },
         });
       }
-    }
 
-    const { hashtags, mentions } = extractTagsAndMentions(caption);
-    if (hashtags.length > 0 && tag === 'Campus Reel') {
-      tag = hashtags[0].slice(0, 40);
-    }
+      if (caption.length > SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS) {
+        await cleanupTempUpload();
+        return reply.code(400).send({
+          error: {
+            code: 'CAPTION_TOO_LONG',
+            message: `Caption exceeds maximum of ${SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS} characters.`,
+          },
+        });
+      }
 
-    // Mentions strictly respect Part 2 Directory visibility rules
-    const discoverablePeers = getDiscoverableUsers(db, viewer.id, { limit: 200 });
-    const discoverableMap = new Map(discoverablePeers.map((p) => [p.username.toLowerCase(), p]));
-    const allowedMentions = mentions.filter((uname) => discoverableMap.has(uname));
+      if (coverBuffer) {
+        try {
+          coverBuffer = sanitizeUploadedImage(coverBuffer, SECURITY_LIMITS.MAX_UPLOAD_BYTES).buffer;
+        } catch (err) {
+          await cleanupTempUpload();
+          const mediaErr = err as Partial<MediaSanitizeError>;
+          return reply.code(mediaErr.status || 400).send({
+            error: {
+              code: mediaErr.code || 'INVALID_COVER',
+              message: mediaErr.message || 'Cover image is invalid.',
+            },
+          });
+        }
+      }
 
-    const id = 'reel_' + crypto.randomUUID().slice(0, 10);
-    const now = Date.now();
-    const nowIso = new Date(now).toISOString();
-    db.prepare(`
-      INSERT INTO reels (
-        id, author_id, caption, tag, duration, poster_key, poster_alt,
-        media_id, cover_media_id, duration_sec, trim_start, trim_end,
-        fit_mode, audience, comments_enabled, mentions_json, hashtags_json,
-        status, created_at_ms, created_at
-      )
-      VALUES (?, ?, ?, ?, ?, 'robotics', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-    `).run(
-      id,
-      viewer.id,
-      caption.slice(0, SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS),
-      tag.slice(0, 40),
-      duration.slice(0, 12),
-      `Campus reel by @${viewer.username}`,
-      videoMediaId,
-      coverMediaId,
-      durationSec,
-      trimStart,
-      trimEnd,
-      fitMode,
-      audience,
-      commentsEnabled ? 1 : 0,
-      JSON.stringify(allowedMentions),
-      JSON.stringify(hashtags),
-      now,
-      nowIso
-    );
+      let probe;
+      try {
+        probe = await probeVideo(rawVideoPath);
+      } catch (err) {
+        await cleanupTempUpload();
+        return reply.code(400).send({
+          error: {
+            code: 'INVALID_VIDEO_FORMAT',
+            message: (err as Error).message || 'Uploaded file could not be decoded as a valid video.',
+          },
+        });
+      }
 
-    if (allowedMentions.length > 0) {
-      const insertNotif = db.prepare(
-        'INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      if (probe.durationSec > SECURITY_LIMITS.MAX_REEL_DURATION_SEC + 0.5) {
+        await cleanupTempUpload();
+        return reply.code(400).send({
+          error: {
+            code: 'VIDEO_TOO_LONG',
+            message: `Reels must be ${SECURITY_LIMITS.MAX_REEL_DURATION_SEC} seconds or shorter.`,
+          },
+        });
+      }
+
+      const safeTrimStart = Number.isFinite(trimStart) ? Math.max(0, Math.min(trimStart, probe.durationSec)) : 0;
+      const safeTrimEnd =
+        Number.isFinite(trimEnd) && trimEnd > safeTrimStart
+          ? Math.min(trimEnd, probe.durationSec)
+          : Math.min(probe.durationSec, SECURITY_LIMITS.MAX_REEL_DURATION_SEC);
+      const trimmedSpan = Math.max(0, safeTrimEnd - safeTrimStart);
+
+      if (trimmedSpan > SECURITY_LIMITS.MAX_REEL_DURATION_SEC + 0.5) {
+        await cleanupTempUpload();
+        return reply.code(400).send({
+          error: {
+            code: 'TRIM_TOO_LONG',
+            message: `Trimmed clip cannot exceed ${SECURITY_LIMITS.MAX_REEL_DURATION_SEC} seconds.`,
+          },
+        });
+      }
+      if (
+        probe.durationSec >= SECURITY_LIMITS.MIN_REEL_DURATION_SEC &&
+        trimmedSpan < SECURITY_LIMITS.MIN_REEL_DURATION_SEC - 0.1
+      ) {
+        await cleanupTempUpload();
+        return reply.code(400).send({
+          error: {
+            code: 'TRIM_TOO_SHORT',
+            message: `Reels must be at least ${SECURITY_LIMITS.MIN_REEL_DURATION_SEC} seconds long.`,
+          },
+        });
+      }
+
+      const { hashtags, mentions } = extractTagsAndMentions(caption);
+      if (hashtags.length > 0 && tag === 'Campus Reel') {
+        tag = hashtags[0].slice(0, 40);
+      }
+
+      // Mentions strictly respect Part 2 Directory visibility rules
+      const discoverablePeers = getDiscoverableUsers(db, viewer.id, { limit: 200 });
+      const discoverableMap = new Map(discoverablePeers.map((p) => [p.username.toLowerCase(), p]));
+      const allowedMentions = mentions.filter((uname) => discoverableMap.has(uname));
+
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      db.prepare(`
+        INSERT INTO reels (
+          id, author_id, caption, tag, duration, poster_key, poster_alt,
+          media_id, cover_media_id, video_path, thumbnail_path, cover_path,
+          width, height, processing_error, duration_sec, trim_start, trim_end,
+          fit_mode, audience, comments_enabled, mentions_json, hashtags_json,
+          status, created_at_ms, created_at
+        )
+        VALUES (?, ?, ?, ?, '', 'robotics', ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?)
+      `).run(
+        id,
+        viewer.id,
+        caption.slice(0, SECURITY_LIMITS.REEL_CAPTION_MAX_CHARS),
+        tag.slice(0, 40),
+        `Campus reel by @${viewer.username}`,
+        safeTrimStart,
+        safeTrimEnd,
+        fitMode,
+        audience,
+        commentsEnabled ? 1 : 0,
+        JSON.stringify(allowedMentions),
+        JSON.stringify(hashtags),
+        now,
+        nowIso
       );
-      for (const uname of allowedMentions) {
-        const peer = discoverableMap.get(uname);
-        if (peer && String(peer.id) !== viewer.id) {
-          insertNotif.run(
-            'n_' + crypto.randomUUID().slice(0, 10),
-            String(peer.id),
-            viewer.username,
-            'reel_mention',
-            `@${viewer.username} mentioned you in a reel`,
-            'reel',
-            id,
-            now,
-            nowIso
-          );
-        }
-      }
-    }
 
-    const created = loadReelsWithStats(db, viewer.id).find((r) => r.id === id);
-    if (!created) {
-      return reply.code(500).send({ error: { code: 'CREATE_FAILED', message: 'Unable to load created reel.' } });
+      // Offload heavy FFmpeg transcode from the HTTP request thread
+      const bgTask = (async () => {
+        try {
+          const result = await transcodeReelVideo({
+            uploadDir,
+            reelId: id,
+            rawInputPath: rawVideoPath!,
+            fitMode,
+            trimStart: safeTrimStart,
+            trimEnd: safeTrimEnd,
+            hasAudio: probe.hasAudio,
+            customCoverBuffer: coverBuffer,
+          });
+
+          if (isAppClosing()) return;
+          const existing = db.prepare('SELECT status FROM reels WHERE id = ?').get(id) as
+            | { status: string }
+            | undefined;
+          if (!existing || existing.status === 'deleted') {
+            await cleanupTempUpload();
+            return;
+          }
+
+          const finalClock = formatDurationClock(result.durationSec);
+          db.prepare(`
+            UPDATE reels
+            SET status = 'active',
+                video_path = ?,
+                thumbnail_path = ?,
+                cover_path = ?,
+                duration_sec = ?,
+                duration = ?,
+                width = ?,
+                height = ?,
+                processing_error = NULL
+            WHERE id = ? AND status = 'processing'
+          `).run(
+            result.videoRelPath,
+            result.thumbnailRelPath,
+            result.coverRelPath,
+            result.durationSec,
+            finalClock,
+            result.width,
+            result.height,
+            id
+          );
+
+          if (allowedMentions.length > 0) {
+            const insertNotif = db.prepare(
+              'INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            );
+            for (const uname of allowedMentions) {
+              const peer = discoverableMap.get(uname);
+              if (peer && String(peer.id) !== viewer.id) {
+                insertNotif.run(
+                  'n_' + crypto.randomUUID().slice(0, 10),
+                  String(peer.id),
+                  viewer.username,
+                  'reel_mention',
+                  `@${viewer.username} mentioned you in a reel`,
+                  'reel',
+                  id,
+                  Date.now(),
+                  new Date().toISOString()
+                );
+              }
+            }
+          }
+        } catch (err) {
+          app.log.error({ err, reelId: id }, 'Background reel transcode failed');
+          if (!isAppClosing()) {
+            try {
+              db.prepare(
+                "UPDATE reels SET status = 'failed', processing_error = ? WHERE id = ? AND status = 'processing'"
+              ).run(String((err as Error).message || 'Video transcoding failed.').slice(0, 300), id);
+            } catch {
+              // ignore DB errors during shutdown
+            }
+          }
+        } finally {
+          if (rawVideoPath) {
+            await fsp.unlink(rawVideoPath).catch(() => {});
+          }
+        }
+      })();
+      trackBackgroundTask(bgTask);
+
+      const created = loadReelsWithStats(db, viewer.id).find((r) => r.id === id);
+      if (!created) {
+        return reply.code(500).send({ error: { code: 'CREATE_FAILED', message: 'Unable to load created reel.' } });
+      }
+      const { authorId: _a, authorStatus: _s, ...publicReel } = created;
+      return reply.code(201).send(publicReel);
+    } catch (err) {
+      await cleanupTempUpload();
+      throw err;
     }
-    const { authorId: _a, authorStatus: _s, ...publicReel } = created;
-    return reply.code(201).send(publicReel);
   };
 
   app.post('/api/v1/reels', { preHandler: auth.requireAuth }, createReelHandler);
   app.post('/api/reels', { preHandler: auth.requireAuth }, createReelHandler);
+
+  const registerReelDiskMediaRoute = (
+    subpath: 'video' | 'thumbnail' | 'cover',
+    column: 'video_path' | 'thumbnail_path' | 'cover_path',
+    mimeType: string
+  ) => {
+    const handler = async (
+      request: import('fastify').FastifyRequest<{ Params: { id: string } }>,
+      reply: import('fastify').FastifyReply
+    ) => {
+      const reelId = String(request.params.id);
+      const reelRow = db
+        .prepare('SELECT id, author_id, status, audience, video_path, thumbnail_path, cover_path FROM reels WHERE id = ?')
+        .get(reelId) as
+        | {
+            id: string;
+            author_id: string;
+            status: string;
+            audience: string | null;
+            video_path: string | null;
+            thumbnail_path: string | null;
+            cover_path: string | null;
+          }
+        | undefined;
+      if (!reelRow) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel media not found.' } });
+      }
+      const viewerRow = request.auth?.userRow || null;
+      if (!canViewerAccessReelMedia(reelRow, viewerRow)) {
+        return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Media access restricted.' } });
+      }
+      const relPath =
+        reelRow[column] ||
+        (column === 'cover_path' ? reelRow.thumbnail_path : column === 'thumbnail_path' ? reelRow.cover_path : null);
+      const absPath = resolveUploadPath(uploadDir, relPath);
+      if (!absPath) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Media file not found.' } });
+      }
+      return streamDiskMediaFile(request, reply, absPath, mimeType);
+    };
+
+    app.get<{ Params: { id: string } }>(`/api/v1/reels/:id/${subpath}`, { preHandler: auth.optionalAuth }, handler);
+    app.get<{ Params: { id: string } }>(`/api/reels/:id/${subpath}`, { preHandler: auth.optionalAuth }, handler);
+  };
+
+  registerReelDiskMediaRoute('video', 'video_path', 'video/mp4');
+  registerReelDiskMediaRoute('thumbnail', 'thumbnail_path', 'image/jpeg');
+  registerReelDiskMediaRoute('cover', 'cover_path', 'image/jpeg');
 
   app.get<{ Params: { id: string } }>(
     '/api/v1/reels/:id/comments',
@@ -1919,20 +2160,7 @@ export function registerSocialRoutes(
           | { id: string; author_id: string; status: string; audience: string | null }
           | undefined;
         if (attachedReel) {
-          const author = db
-            .prepare('SELECT status FROM users WHERE id = ?')
-            .get(attachedReel.author_id) as { status: UserStatus } | undefined;
-          const relations = getViewerRelations(db, viewer?.id || null);
-          const blockedByAudience =
-            attachedReel.audience === 'followers' &&
-            (!viewer || (viewer.id !== attachedReel.author_id && !relations.followingIds.has(attachedReel.author_id)));
-          if (
-            attachedReel.status !== 'active' ||
-            author?.status === 'banned' ||
-            relations.blockedIds.has(attachedReel.author_id) ||
-            relations.blockedByIds.has(attachedReel.author_id) ||
-            blockedByAudience
-          ) {
+          if (!canViewerAccessReelMedia(attachedReel, viewerRow)) {
             return reply
               .code(403)
               .send({ error: { code: 'FORBIDDEN', message: 'Media access restricted.' } });

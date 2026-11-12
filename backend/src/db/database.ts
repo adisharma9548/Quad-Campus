@@ -85,18 +85,18 @@ function migrate(db: DatabaseSync): void {
     db.exec("ALTER TABLE reports ADD COLUMN target_context TEXT DEFAULT ''");
   }
 
-  // Additive Part 5 Reel metadata columns
+  // Additive Part 5 Reel metadata & disk media columns
   if (!hasColumn(db, 'reels', 'cover_media_id')) {
     db.exec('ALTER TABLE reels ADD COLUMN cover_media_id TEXT');
   }
   if (!hasColumn(db, 'reels', 'duration_sec')) {
-    db.exec('ALTER TABLE reels ADD COLUMN duration_sec REAL NOT NULL DEFAULT 30');
+    db.exec('ALTER TABLE reels ADD COLUMN duration_sec REAL');
   }
   if (!hasColumn(db, 'reels', 'trim_start')) {
     db.exec('ALTER TABLE reels ADD COLUMN trim_start REAL NOT NULL DEFAULT 0');
   }
   if (!hasColumn(db, 'reels', 'trim_end')) {
-    db.exec('ALTER TABLE reels ADD COLUMN trim_end REAL NOT NULL DEFAULT 30');
+    db.exec('ALTER TABLE reels ADD COLUMN trim_end REAL');
   }
   if (!hasColumn(db, 'reels', 'fit_mode')) {
     db.exec("ALTER TABLE reels ADD COLUMN fit_mode TEXT NOT NULL DEFAULT 'crop'");
@@ -112,5 +112,84 @@ function migrate(db: DatabaseSync): void {
   }
   if (!hasColumn(db, 'reels', 'hashtags_json')) {
     db.exec("ALTER TABLE reels ADD COLUMN hashtags_json TEXT DEFAULT '[]'");
+  }
+  if (!hasColumn(db, 'reels', 'video_path')) {
+    db.exec('ALTER TABLE reels ADD COLUMN video_path TEXT');
+  }
+  if (!hasColumn(db, 'reels', 'thumbnail_path')) {
+    db.exec('ALTER TABLE reels ADD COLUMN thumbnail_path TEXT');
+  }
+  if (!hasColumn(db, 'reels', 'cover_path')) {
+    db.exec('ALTER TABLE reels ADD COLUMN cover_path TEXT');
+  }
+  if (!hasColumn(db, 'reels', 'width')) {
+    db.exec('ALTER TABLE reels ADD COLUMN width INTEGER');
+  }
+  if (!hasColumn(db, 'reels', 'height')) {
+    db.exec('ALTER TABLE reels ADD COLUMN height INTEGER');
+  }
+  if (!hasColumn(db, 'reels', 'processing_error')) {
+    db.exec('ALTER TABLE reels ADD COLUMN processing_error TEXT');
+  }
+
+  // Upgrade legacy reels table if CHECK constraint excludes 'processing'/'failed' or has DEFAULT 30 on duration_sec
+  const reelsMeta = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'reels'")
+    .get() as { sql?: string } | undefined;
+  if (
+    reelsMeta?.sql &&
+    (!reelsMeta.sql.includes("'processing'") || /duration_sec\s+REAL[^,]*DEFAULT\s+30/i.test(reelsMeta.sql))
+  ) {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN;
+      CREATE TABLE reels_migrated (
+        id TEXT PRIMARY KEY,
+        author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        caption TEXT NOT NULL,
+        tag TEXT NOT NULL DEFAULT 'Campus Reel',
+        duration TEXT NOT NULL DEFAULT '',
+        poster_key TEXT DEFAULT 'robotics',
+        poster_alt TEXT DEFAULT '',
+        media_id TEXT REFERENCES media_assets(id) ON DELETE SET NULL,
+        cover_media_id TEXT REFERENCES media_assets(id) ON DELETE SET NULL,
+        video_path TEXT,
+        thumbnail_path TEXT,
+        cover_path TEXT,
+        width INTEGER,
+        height INTEGER,
+        processing_error TEXT,
+        duration_sec REAL,
+        trim_start REAL NOT NULL DEFAULT 0,
+        trim_end REAL,
+        fit_mode TEXT NOT NULL DEFAULT 'crop',
+        audience TEXT NOT NULL DEFAULT 'campus',
+        comments_enabled INTEGER NOT NULL DEFAULT 1,
+        mentions_json TEXT DEFAULT '[]',
+        hashtags_json TEXT DEFAULT '[]',
+        shares_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('processing', 'active', 'failed', 'deleted')),
+        created_at_ms INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO reels_migrated (
+        id, author_id, caption, tag, duration, poster_key, poster_alt,
+        media_id, cover_media_id, video_path, thumbnail_path, cover_path,
+        width, height, processing_error, duration_sec, trim_start, trim_end,
+        fit_mode, audience, comments_enabled, mentions_json, hashtags_json,
+        shares_count, status, created_at_ms, created_at
+      )
+      SELECT
+        id, author_id, caption, tag, duration, poster_key, poster_alt,
+        media_id, cover_media_id, video_path, thumbnail_path, cover_path,
+        width, height, processing_error, duration_sec, trim_start, trim_end,
+        fit_mode, audience, comments_enabled, mentions_json, hashtags_json,
+        shares_count, status, created_at_ms, created_at
+      FROM reels;
+      DROP TABLE reels;
+      ALTER TABLE reels_migrated RENAME TO reels;
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
   }
 }

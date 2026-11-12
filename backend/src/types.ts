@@ -200,15 +200,19 @@ export interface ReelItem {
   mediaUrl: string;
   videoUrl: string;
   coverUrl: string;
-  durationSec: number;
+  thumbnailUrl: string;
+  durationSec: number | null;
   trimStart: number;
-  trimEnd: number;
+  trimEnd: number | null;
+  width: number | null;
+  height: number | null;
   fitMode: 'fit' | 'crop';
   audience: 'campus' | 'followers';
   commentsEnabled: boolean;
   mentions: string[];
   hashtags: string[];
   status: string;
+  processingError?: string | null;
   createdAtMs: number;
   score?: number;
 }
