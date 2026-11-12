@@ -210,7 +210,12 @@ CREATE TABLE IF NOT EXISTS reel_comments (
   id TEXT PRIMARY KEY,
   reel_id TEXT NOT NULL REFERENCES reels(id) ON DELETE CASCADE,
   author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_comment_id TEXT REFERENCES reel_comments(id) ON DELETE CASCADE,
+  reply_to_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reply_to_username TEXT DEFAULT '',
   content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  deleted_at TEXT,
   created_at_ms INTEGER NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -249,7 +254,7 @@ CREATE TABLE IF NOT EXISTS thread_replies (
 CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY,
   reporter_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  target_type TEXT NOT NULL CHECK (target_type IN ('post', 'comment', 'user', 'reel', 'thread', 'thread_comment')),
+  target_type TEXT NOT NULL CHECK (target_type IN ('post', 'comment', 'user', 'reel', 'thread', 'thread_comment', 'reel_comment')),
   target_id TEXT NOT NULL,
   reason TEXT NOT NULL,
   details TEXT DEFAULT '',

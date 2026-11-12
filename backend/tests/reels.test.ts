@@ -566,4 +566,263 @@ describe('Part 5: Reels Video Sanitizer & Upload Flow', () => {
     });
     assert.equal(adminThumb.statusCode, 200);
   });
+
+  test('Part C+D: enforces nested reel comments, visibility, sanitization, notifications, delete, and reporting', async () => {
+    const uploadReel = async (audience: 'campus' | 'followers', commentsEnabled: boolean, caption: string) => {
+      const mp4 = generateRealVideoBuffer(tmpDir, 4, false);
+      const form = buildMultipartBody(
+        [
+          { name: 'caption', value: caption },
+          { name: 'durationSec', value: '4' },
+          { name: 'trimStart', value: '0' },
+          { name: 'trimEnd', value: '4' },
+          { name: 'audience', value: audience },
+          { name: 'commentsEnabled', value: String(commentsEnabled) },
+        ],
+        [{ name: 'video', filename: `${audience}-c.mp4`, contentType: 'video/mp4', data: mp4 }]
+      );
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/reels',
+        headers: {
+          Authorization: `Bearer ${tokenAuthor}`,
+          'content-type': form.contentType,
+        },
+        payload: form.payload,
+      });
+      assert.equal(res.statusCode, 201);
+      const { id } = res.json() as { id: string };
+      for (let i = 0; i < 60; i += 1) {
+        const poll = await app.inject({
+          method: 'GET',
+          url: `/api/v1/reels/${id}`,
+          headers: { Authorization: `Bearer ${tokenAuthor}` },
+        });
+        const body = poll.json() as { id: string; status: string };
+        if (body.status === 'active') return body;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error(`Timed out waiting for reel ${id}`);
+    };
+
+    const signupRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup',
+      payload: {
+        email: 'reel_stranger@btech.college.edu.in',
+        password: 'Password@123',
+        department: 'Computer Science & Engineering - Computer Science',
+        year: '3rd Year',
+        section: 'A',
+        username: 'reel_stranger',
+      },
+    });
+    assert.equal(signupRes.statusCode, 201);
+    const tokenStranger = (signupRes.json() as { session: { token: string } }).session.token;
+
+    const campusReel = await uploadReel('campus', true, 'Campus comments test reel');
+    const followersReel = await uploadReel('followers', true, 'Followers comments test reel');
+
+    // Stranger cannot GET or POST comments on followers-only reel (403)
+    const forbidGet = await app.inject({
+      method: 'GET',
+      url: `/api/v1/reels/${followersReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+    });
+    assert.equal(forbidGet.statusCode, 403);
+
+    const forbidPost = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${followersReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+      payload: { content: 'Should fail' },
+    });
+    assert.equal(forbidPost.statusCode, 403);
+
+    // Approved follower (tokenOther from Phase 5.5) can comment on followers-only reel
+    const followerComment = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${followersReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: { content: 'Follower insight' },
+    });
+    assert.equal(followerComment.statusCode, 201);
+    const followerCommentId = (followerComment.json() as { id: string }).id;
+
+    // Validation: script-only content -> 400 EMPTY_COMMENT; HTML tags stripped; >500 chars -> 400 COMMENT_TOO_LONG
+    const xssEmpty = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${campusReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+      payload: { content: '<script>alert(1)</script>' },
+    });
+    assert.equal(xssEmpty.statusCode, 400);
+
+    const tooLong = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${campusReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+      payload: { content: 'a'.repeat(501) },
+    });
+    assert.equal(tooLong.statusCode, 400);
+    assert.equal(tooLong.json().error.code, 'COMMENT_TOO_LONG');
+
+    const crossReelParent = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${campusReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: { content: 'Cross reel attempt', parentCommentId: followerCommentId },
+    });
+    assert.equal(crossReelParent.statusCode, 400);
+    assert.equal(crossReelParent.json().error.code, 'INVALID_PARENT');
+
+    // Create 4-level deep reply chain (levels 0 -> 1 -> 2 -> 3)
+    const rootRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${campusReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+      payload: { content: '<script>bad()</script><b>Clean</b> root comment' },
+    });
+    assert.equal(rootRes.statusCode, 201);
+    const rootComment = rootRes.json() as { id: string; content: string };
+    assert.equal(rootComment.content, 'Clean root comment');
+
+    const r1Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${campusReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: { content: 'Level 1 reply', parentCommentId: rootComment.id },
+    });
+    assert.equal(r1Res.statusCode, 201);
+    const r1 = r1Res.json() as { id: string; replyToUsername: string };
+    assert.equal(r1.replyToUsername, 'reel_stranger');
+
+    const r2Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${campusReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+      payload: { content: 'Level 2 reply', parentCommentId: r1.id },
+    });
+    assert.equal(r2Res.statusCode, 201);
+    const r2 = r2Res.json() as { id: string };
+
+    const r3Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${campusReel.id}/comments`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+      payload: { content: 'Level 3 deep reply', parentCommentId: r2.id },
+    });
+    assert.equal(r3Res.statusCode, 201);
+    const r3 = r3Res.json() as { id: string };
+
+    // GET comments with default maxDepth=2 hides level 3 behind hiddenReplyCount
+    const treeRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/reels/${campusReel.id}/comments?limit=10&offset=0&maxDepth=2`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+    });
+    assert.equal(treeRes.statusCode, 200);
+    const tree = treeRes.json() as {
+      totalCount: number;
+      items: Array<{
+        id: string;
+        replies: Array<{
+          id: string;
+          replies: Array<{ id: string; hasMoreReplies?: boolean; hiddenReplyCount?: number }>;
+        }>;
+      }>;
+    };
+    assert.equal(tree.totalCount, 4);
+    const loadedL2 = tree.items[0].replies[0].replies[0];
+    assert.equal(loadedL2.hasMoreReplies, true);
+    assert.equal(loadedL2.hiddenReplyCount, 1);
+
+    // Load more replies under level 2 returns level 3
+    const deepRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/reels/${campusReel.id}/comments?parentId=${r2.id}&maxDepth=2`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+    });
+    assert.equal(deepRes.statusCode, 200);
+    const deepItems = (deepRes.json() as { items: Array<{ id: string }> }).items;
+    assert.equal(deepItems.length, 1);
+    assert.equal(deepItems[0].id, r3.id);
+
+    // Report r1 by tokenStranger; self-report & duplicate blocked
+    const selfReport = await app.inject({
+      method: 'POST',
+      url: '/api/v1/reports',
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: { targetType: 'reel_comment', targetId: r1.id, reason: 'Harassment' },
+    });
+    assert.equal(selfReport.statusCode, 400);
+
+    const reportOk = await app.inject({
+      method: 'POST',
+      url: '/api/v1/reports',
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+      payload: { targetType: 'reel_comment', targetId: r1.id, reason: 'Spam or misleading' },
+    });
+    assert.equal(reportOk.statusCode, 201);
+
+    const reportDup = await app.inject({
+      method: 'POST',
+      url: '/api/v1/reports',
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+      payload: { targetType: 'reel_comment', targetId: r1.id, reason: 'Spam or misleading' },
+    });
+    assert.equal(reportDup.statusCode, 409);
+
+    // Notifications created for stranger when tokenOther replied to rootComment
+    const notifsRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/social/overview',
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+    });
+    assert.equal(notifsRes.statusCode, 200);
+    const notifItems = (notifsRes.json() as { notifications?: Array<{ kind: string; targetId: string }> }).notifications || [];
+    assert.equal(
+      notifItems.some((n) => n.kind === 'reel_comment_reply' && n.targetId === campusReel.id),
+      true
+    );
+
+    // Unauthorized delete blocked (403); author deletes parent with children -> soft-deleted keeping subtree
+    const forbidDelComment = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/reels/${campusReel.id}/comments/${r1.id}`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+    });
+    assert.equal(forbidDelComment.statusCode, 403);
+
+    const softDelParent = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/reels/${campusReel.id}/comments/${rootComment.id}`,
+      headers: { Authorization: `Bearer ${tokenStranger}` },
+    });
+    assert.equal(softDelParent.statusCode, 200);
+    assert.equal(softDelParent.json().softDeleted, true);
+    assert.equal(softDelParent.json().commentsCount, 3);
+
+    // Verify tree preserves children under [deleted] root & reportedByMe=true on r1
+    const treeAfterDel = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/reels/${campusReel.id}/comments`,
+        headers: { Authorization: `Bearer ${tokenStranger}` },
+      })
+    ).json() as { items: Array<{ isDeleted: boolean; content: string; replies: Array<{ reportedByMe?: boolean }> }> };
+    assert.equal(treeAfterDel.items[0].isDeleted, true);
+    assert.equal(treeAfterDel.items[0].content, '[deleted]');
+    assert.equal(treeAfterDel.items[0].replies[0].reportedByMe, true);
+
+    // Reel owner can moderate & hard-delete leaf comment r3
+    const ownerDelLeaf = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/reels/${campusReel.id}/comments/${r3.id}`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(ownerDelLeaf.statusCode, 200);
+    assert.equal(ownerDelLeaf.json().softDeleted, false);
+    assert.equal(ownerDelLeaf.json().commentsCount, 2);
+  });
 });

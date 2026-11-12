@@ -250,3 +250,25 @@ body::-webkit-scrollbar {
     transition-duration: 0ms !important;
   }
 }
+
+.quad-reel-comments-desktop {
+  display: none;
+}
+
+.quad-reel-comments-mobile-wrap {
+  display: flex;
+  background-color: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+@media (min-width: 1100px) {
+  .quad-reel-comments-desktop {
+    display: flex;
+    width: 340px;
+    flex-shrink: 0;
+  }
+
+  .quad-reel-comments-mobile-wrap {
+    display: none;
+  }
+}

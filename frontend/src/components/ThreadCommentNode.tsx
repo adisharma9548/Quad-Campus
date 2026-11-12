@@ -30,6 +30,9 @@ export interface ThreadCommentNodeProps {
   onLoadMoreReplies: (threadId: string | number, parentCommentId: string | number) => Promise<void>;
   onReportComment?: (threadId: string | number, comment: ThreadReply) => void;
   onUndoReport?: (threadId: string | number, comment: ThreadReply) => void;
+  canDeleteComment?: (comment: ThreadReply) => boolean;
+  domIdPrefix?: string;
+  maxLength?: number;
 }
 
 export default function ThreadCommentNode({
@@ -44,6 +47,9 @@ export default function ThreadCommentNode({
   onLoadMoreReplies,
   onReportComment,
   onUndoReport,
+  canDeleteComment,
+  domIdPrefix = 'thread-comment',
+  maxLength = 2000,
 }: ThreadCommentNodeProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isReplying, setIsReplying] = useState(false);
@@ -59,6 +65,7 @@ export default function ThreadCommentNode({
     Boolean(currentUsername) &&
     node.username.toLowerCase() === currentUsername.toLowerCase() &&
     !node.isDeleted;
+  const canDelete = isOwn || (Boolean(canDeleteComment?.(node)) && !node.isDeleted);
   const children = node.replies || [];
   const totalDescendants = countDescendants(node);
   const canIndentFurther = depth < MAX_VISUAL_INDENT_DEPTH;
@@ -119,7 +126,7 @@ export default function ThreadCommentNode({
   void onUndoReport;
 
   return (
-    <div id={`thread-comment-${node.id}`} className="relative">
+    <div id={`${domIdPrefix}-${node.id}`} className="relative">
       <div
         className={`rounded-[10px] border transition-colors p-3 ${
           isHighlighted
@@ -177,7 +184,7 @@ export default function ThreadCommentNode({
                     role="menu"
                     className="absolute right-0 top-8 z-30 w-40 rounded-[12px] border border-ink/12 bg-canvas shadow-lg py-1"
                   >
-                    {isOwn ? (
+                    {canDelete && (
                       <button
                         type="button"
                         role="menuitem"
@@ -190,18 +197,19 @@ export default function ThreadCommentNode({
                         <Trash2 size={14} />
                         <span>Delete</span>
                       </button>
-                    ) : (
+                    )}
+                    {!isOwn && onReportComment && (
                       <button
                         type="button"
                         role="menuitem"
                         onClick={() => {
                           setMenuOpen(false);
-                          onReportComment?.(threadId, node);
+                          onReportComment(threadId, node);
                         }}
                         className="w-full px-3 py-2 text-left text-xs font-semibold text-ink hover:bg-ink/6 flex items-center gap-2 cursor-pointer"
                       >
                         <Flag size={14} />
-                        <span>Report</span>
+                        <span>{node.reportedByMe ? 'Reported' : 'Report'}</span>
                       </button>
                     )}
                   </div>
@@ -243,7 +251,7 @@ export default function ThreadCommentNode({
             <textarea
               ref={replyInputRef}
               rows={2}
-              maxLength={2000}
+              maxLength={maxLength}
               value={replyDraft}
               onChange={(e) => setReplyDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -318,6 +326,9 @@ export default function ThreadCommentNode({
                 onLoadMoreReplies={onLoadMoreReplies}
                 onReportComment={onReportComment}
                 onUndoReport={onUndoReport}
+                canDeleteComment={canDeleteComment}
+                domIdPrefix={domIdPrefix}
+                maxLength={maxLength}
               />
             ))}
 

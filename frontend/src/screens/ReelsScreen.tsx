@@ -10,23 +10,21 @@ import {
   Bookmark,
   Music,
   Film,
-  Send,
   Loader2,
   AlertCircle,
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useToast } from '../context/ToastContext';
-import { IS_REAL_BACKEND, apiRequest, resolveApiMediaUrl } from '../services/apiClient';
+import { resolveApiMediaUrl } from '../services/apiClient';
 import {
   formatPlaybackSeconds,
   formatTotalSeconds,
   resolveReelDurationLabel,
 } from '../utils/formatDuration';
-import type { ReelCommentItem } from '../types/quad';
+import ReelCommentsPanel from '../components/ReelCommentsPanel';
 import {
   Avatar,
-  Modal,
   Button,
   EmptyState,
   Skeleton,
@@ -879,10 +877,7 @@ export default function ReelsScreen({
   const [isMuted, setIsMuted] = useState<boolean>(readInitialSessionMute);
   const [savedMap, setSavedMap] = useState<Record<string | number, boolean>>({});
   const [shareCountMap, setShareCountMap] = useState<Record<string | number, number>>({});
-  const [commentReel, setCommentReel] = useState<import('../types/quad').ReelItem | null>(null);
-  const [reelComments, setReelComments] = useState<ReelCommentItem[]>([]);
-  const [commentsLoading, setCommentsLoading] = useState(false);
-  const [commentInput, setCommentInput] = useState('');
+  const [commentsOpen, setCommentsOpen] = useState(false);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const slideRefs = useRef<Record<string | number, HTMLDivElement | null>>({});
@@ -970,11 +965,14 @@ export default function ReelsScreen({
   );
 
   const activeReelId = visibleReelId ?? reels[0]?.id ?? null;
+  const activeReel = useMemo(
+    () => reels.find((r) => String(r.id) === String(activeReelId)) || reels[0] || null,
+    [activeReelId, reels]
+  );
 
   // Keyboard shortcuts (Space, M, ArrowLeft/Right +-5s, ArrowUp/Down/J/K)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (commentReel) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
@@ -1012,7 +1010,7 @@ export default function ReelsScreen({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeReelId, commentReel, reels, scrollToIndex]);
+  }, [activeReelId, reels, scrollToIndex]);
 
   const toggleLike = async (id: string | number) => {
     await toggleReelLike(id);
@@ -1030,65 +1028,6 @@ export default function ReelsScreen({
     showToast(`Copied link to @${reel.username}'s reel`, 'success');
   };
 
-  useEffect(() => {
-    if (!commentReel) {
-      setReelComments([]);
-      return;
-    }
-    if (!IS_REAL_BACKEND) return;
-    let active = true;
-    setCommentsLoading(true);
-    apiRequest<{ items?: ReelCommentItem[] }>(`/reels/${encodeURIComponent(commentReel.id)}/comments`)
-      .then((res) => {
-        if (active) setReelComments(res?.items || []);
-      })
-      .catch(() => {
-        if (active) setReelComments([]);
-      })
-      .finally(() => {
-        if (active) setCommentsLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [commentReel]);
-
-  const handlePostComment = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!commentInput.trim() || !commentReel) return;
-    if (commentReel.commentsEnabled === false) {
-      showToast('Comments are turned off for this reel', 'info');
-      return;
-    }
-    const content = commentInput.trim();
-    if (!IS_REAL_BACKEND) {
-      setReelComments((prev) => [
-        ...prev,
-        {
-          id: `rc_${Date.now()}`,
-          username: state.username || 'quantum_dev',
-          initials: state.userInitials || 'QD',
-          content,
-          timestamp: 'Just now',
-        },
-      ]);
-      showToast('Comment posted to reel', 'success');
-      setCommentInput('');
-      return;
-    }
-    try {
-      const created = await apiRequest<ReelCommentItem>(
-        `/reels/${encodeURIComponent(commentReel.id)}/comments`,
-        { method: 'POST', body: { content } }
-      );
-      setReelComments((prev) => [...prev, created]);
-      setCommentInput('');
-      showToast('Comment posted to reel', 'success');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Unable to post comment', 'error');
-    }
-  };
-
   if (reels.length === 0) {
     return (
       <div className="w-full py-12">
@@ -1102,13 +1041,13 @@ export default function ReelsScreen({
   }
 
   return (
-    <div className="w-full flex flex-col items-center justify-center">
+    <div className="w-full flex items-start justify-center gap-6">
       {/* Main Vertical 9:16 Snap-Scroll Player Container */}
       <div
         ref={containerRef}
         role="region"
         aria-label="Vertical Campus Reels feed"
-        className="w-full h-[calc(100dvh-168px)] md:h-[calc(100dvh-136px)] min-h-[440px] max-h-[780px] overflow-y-scroll snap-y snap-mandatory no-scrollbar flex flex-col items-center"
+        className="flex-1 min-w-0 h-[calc(100dvh-168px)] md:h-[calc(100dvh-136px)] min-h-[440px] max-h-[780px] overflow-y-scroll snap-y snap-mandatory no-scrollbar flex flex-col items-center"
         style={{ scrollSnapType: 'y mandatory', WebkitOverflowScrolling: 'touch' }}
       >
         {reels.map((reel) => (
@@ -1128,7 +1067,14 @@ export default function ReelsScreen({
               onToggleLike={toggleLike}
               saved={Boolean(savedMap[reel.id])}
               onToggleSave={toggleSave}
-              onOpenComments={(r) => setCommentReel(r)}
+              onOpenComments={(r) => {
+                if (commentsOpen && String(activeReel?.id) === String(r.id)) {
+                  setCommentsOpen(false);
+                } else {
+                  setVisibleReelId(r.id);
+                  setCommentsOpen(true);
+                }
+              }}
               onShare={handleShare}
               onOpenProfile={onOpenPeerProfile}
               shareCountOffset={shareCountMap[reel.id] || 0}
@@ -1138,70 +1084,13 @@ export default function ReelsScreen({
         ))}
       </div>
 
-      {/* Comments Sheet Modal */}
-      <Modal
-        variant="sheet"
-        isOpen={Boolean(commentReel)}
-        onClose={() => setCommentReel(null)}
-        title={`Comments (${commentReel ? Math.max(commentReel.comments || 0, reelComments.length) : 0})`}
-        description={commentReel ? `Discussion on @${commentReel.username}'s demo` : ''}
-        size="lg"
-      >
-        <div className="space-y-4">
-          <div className="max-h-[45vh] overflow-y-auto space-y-3 pr-1 text-xs">
-            {commentsLoading ? (
-              <p className="text-ink/60 py-4 text-center">Loading comments...</p>
-            ) : reelComments.length === 0 ? (
-              <p className="text-ink/60 py-4 text-center">
-                {commentReel?.commentsEnabled === false
-                  ? 'Comments are turned off for this reel.'
-                  : 'No comments yet. Start the discussion below.'}
-              </p>
-            ) : (
-              reelComments.map((c) => (
-                <div
-                  key={c.id}
-                  className="flex items-start gap-3 p-3 rounded-[8px] bg-ink/6 border border-ink/12"
-                >
-                  <Avatar initials={c.initials} size="sm" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-ink">@{c.username}</p>
-                      <span className="text-ink/60">• {c.timestamp}</span>
-                    </div>
-                    <p className="text-ink/80 mt-1 leading-relaxed">{c.content}</p>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {commentReel?.commentsEnabled === false ? (
-            <div className="pt-3 border-t border-ink/12 text-center text-xs font-semibold text-ink/60">
-              Comments have been turned off by @{commentReel.username}.
-            </div>
-          ) : (
-            <form onSubmit={handlePostComment} className="pt-3 border-t border-ink/12 flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="Add a verified campus comment..."
-                value={commentInput}
-                onChange={(e) => setCommentInput(e.target.value)}
-                className="flex-1 min-h-[44px] px-3 py-2 text-xs rounded-[8px] border border-ink/12 bg-canvas text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent"
-              />
-              <Button
-                type="submit"
-                variant="primary"
-                size="md"
-                icon={Send}
-                disabled={!commentInput.trim()}
-              >
-                Post
-              </Button>
-            </form>
-          )}
-        </div>
-      </Modal>
+      {/* Desktop right-hand comments panel (340px) & responsive narrow bottom sheet */}
+      <ReelCommentsPanel
+        reel={activeReel}
+        isOpen={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+        mode="split"
+      />
     </div>
   );
 }

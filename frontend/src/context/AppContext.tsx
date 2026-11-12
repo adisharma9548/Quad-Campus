@@ -172,6 +172,7 @@ export interface AppContextValue {
   searchMentionUsers: (query: string) => Promise<PeerUser[]>;
   markReelsSeen: () => Promise<void>;
   toggleReelLike: (reelId: string | number) => Promise<{ likes: number; liked: boolean } | null>;
+  updateReelCommentCount: (reelId: string | number, nextCount: number) => void;
   markBestAnswer: (postId: string | number, answerId: string) => Promise<void>;
   markNotificationsRead: () => Promise<void>;
   deletePost: (postId: string | number) => Promise<void>;
@@ -983,6 +984,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return res;
   }, []);
 
+  const updateReelCommentCount = useCallback((reelId: string | number, nextCount: number) => {
+    const safeCount = Math.max(0, Number(nextCount) || 0);
+    setState((prev) => ({
+      ...prev,
+      reels: (prev.reels || []).map((r) =>
+        String(r.id) === String(reelId)
+          ? { ...r, comments: safeCount, commentsCount: safeCount }
+          : r
+      ),
+    }));
+  }, []);
+
   const markNotificationsRead = useCallback(async () => {
     setState((prev) => ({
       ...prev,
@@ -1575,6 +1588,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         searchMentionUsers,
         markReelsSeen,
         toggleReelLike,
+        updateReelCommentCount,
         markBestAnswer,
         markNotificationsRead,
         deletePost,

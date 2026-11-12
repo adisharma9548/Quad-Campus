@@ -105,12 +105,9 @@ export interface ReelItem {
   hashtags?: string[];
 }
 
-export interface ReelCommentItem {
+export interface ReelCommentItem extends ThreadReply {
   id: string;
-  username: string;
-  initials: string;
-  content: string;
-  timestamp: string;
+  reelId?: string | number;
 }
 
 export interface SignUpPayload {

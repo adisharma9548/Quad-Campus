@@ -74,6 +74,7 @@ interface JoinedThreadRow {
 interface JoinedThreadReplyRow {
   id: string;
   thread_id: string;
+  reel_id?: string;
   author_id: string;
   parent_comment_id: string | null;
   reply_to_user_id: string | null;
@@ -91,6 +92,7 @@ interface JoinedThreadReplyRow {
 interface ThreadReplyDto {
   id: string;
   threadId: string;
+  reelId?: string;
   parentCommentId: string | null;
   replyToUserId: string | null;
   replyToUsername: string | null;
@@ -108,6 +110,15 @@ interface ThreadReplyDto {
   replies: ThreadReplyDto[];
 }
 
+function sanitizePlainTextComment(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\r\n/g, '\n')
+    .trim();
+}
+
 export function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem[] {
   const rows = viewerId
     ? (db
@@ -121,7 +132,7 @@ export function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): R
             u.discoverable,
             u.status AS author_status,
             (SELECT COUNT(*) FROM reel_likes rl WHERE rl.reel_id = r.id) AS likes_count,
-            (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id) AS comments_count,
+            (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id AND rc.status = 'active') AS comments_count,
             (SELECT COUNT(*) FROM reel_views rv WHERE rv.reel_id = r.id) AS views_count
           FROM reels r
           JOIN users u ON u.id = r.author_id
@@ -141,7 +152,7 @@ export function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): R
             u.discoverable,
             u.status AS author_status,
             (SELECT COUNT(*) FROM reel_likes rl WHERE rl.reel_id = r.id) AS likes_count,
-            (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id) AS comments_count,
+            (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id AND rc.status = 'active') AS comments_count,
             (SELECT COUNT(*) FROM reel_views rv WHERE rv.reel_id = r.id) AS views_count
           FROM reels r
           JOIN users u ON u.id = r.author_id
@@ -783,95 +794,380 @@ export function registerSocialRoutes(
   registerReelDiskMediaRoute('thumbnail', 'thumbnail_path', 'image/jpeg');
   registerReelDiskMediaRoute('cover', 'cover_path', 'image/jpeg');
 
-  app.get<{ Params: { id: string } }>(
-    '/api/v1/reels/:id/comments',
-    { preHandler: auth.optionalAuth },
-    async (request, reply) => {
-      const reelId = String(request.params.id);
-      const reelRow = db
-        .prepare("SELECT id, comments_enabled FROM reels WHERE id = ? AND status = 'active'")
-        .get(reelId) as { id: string; comments_enabled: number | null } | undefined;
-      if (!reelRow) {
-        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
-      }
-      const viewerId = request.auth?.userRow?.id || null;
-      const relations = getViewerRelations(db, viewerId);
-      const rows = db
-        .prepare(`
-          SELECT rc.id, rc.author_id, rc.content, rc.created_at_ms, rc.created_at, u.username, u.avatar_initials AS initials
-          FROM reel_comments rc
-          JOIN users u ON u.id = rc.author_id
-          WHERE rc.reel_id = ? AND u.status != 'banned' AND u.status != 'deleted'
-          ORDER BY rc.created_at_ms ASC
-        `)
-        .all(reelId) as Array<{
+  const resolveActiveReelForCommentAccess = (
+    reelId: string,
+    viewerRow: { id: string; role?: UserRole } | null
+  ):
+    | {
+        reel: {
           id: string;
           author_id: string;
-          content: string;
-          created_at_ms: number;
-          created_at: string;
-          username: string;
-          initials: string;
-        }>;
-      const items = rows
-        .filter(
-          (r) =>
-            !relations.blockedIds.has(r.author_id) &&
-            !relations.blockedByIds.has(r.author_id) &&
-            !relations.mutedIds.has(r.author_id)
-        )
-        .map((r) => ({
-          id: r.id,
-          username: r.username,
-          initials: r.initials,
-          content: r.content,
-          timestamp: formatRelativeTime(r.created_at_ms),
-        }));
+          status: string;
+          audience: string | null;
+          comments_enabled: number | null;
+        };
+      }
+    | { status: 404 | 403; code: string; message: string } => {
+    const reelRow = db
+      .prepare('SELECT id, author_id, status, audience, comments_enabled FROM reels WHERE id = ?')
+      .get(reelId) as
+      | {
+          id: string;
+          author_id: string;
+          status: string;
+          audience: string | null;
+          comments_enabled: number | null;
+        }
+      | undefined;
+    if (!reelRow || reelRow.status !== 'active') {
+      return { status: 404, code: 'NOT_FOUND', message: 'Reel not found.' };
+    }
+    if (!canViewerAccessReelMedia(reelRow, viewerRow)) {
       return {
-        items,
-        commentsEnabled: reelRow.comments_enabled === null ? true : Boolean(reelRow.comments_enabled),
+        status: 403,
+        code: 'FORBIDDEN',
+        message: 'You do not have permission to view or comment on this reel.',
       };
     }
-  );
+    return { reel: reelRow };
+  };
 
-  app.post<{ Params: { id: string }; Body: { content?: string } }>(
-    '/api/v1/reels/:id/comments',
-    { preHandler: auth.requireAuth },
-    async (request, reply) => {
-      const reelId = String(request.params.id);
-      const reelRow = db
-        .prepare("SELECT id, author_id, comments_enabled FROM reels WHERE id = ? AND status = 'active'")
-        .get(reelId) as { id: string; author_id: string; comments_enabled: number | null } | undefined;
-      if (!reelRow) {
-        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
-      }
-      if (reelRow.comments_enabled === 0) {
-        return reply.code(403).send({
-          error: { code: 'COMMENTS_DISABLED', message: 'Comments are turned off for this reel.' },
-        });
-      }
-      const content = String(request.body?.content || '').trim();
-      if (!content) {
-        return reply
-          .code(400)
-          .send({ error: { code: 'EMPTY_COMMENT', message: 'Comment cannot be empty.' } });
-      }
-      const viewer = request.auth!.userRow;
-      const id = 'rc_' + crypto.randomUUID().slice(0, 10);
-      const now = Date.now();
-      const createdAt = new Date(now).toISOString();
-      db.prepare(
-        'INSERT INTO reel_comments (id, reel_id, author_id, content, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(id, reelId, viewer.id, content.slice(0, 600), now, createdAt);
+  const countActiveReelComments = (reelId: string): number => {
+    const row = db
+      .prepare("SELECT COUNT(*) AS c FROM reel_comments WHERE reel_id = ? AND status = 'active'")
+      .get(reelId) as { c: number } | undefined;
+    return Number(row?.c || 0);
+  };
 
-      return reply.code(201).send({
-        id,
-        username: viewer.username,
-        initials: viewer.avatar_initials,
-        content: content.slice(0, 600),
-        timestamp: 'Just now',
+  const getReelCommentsHandler = async (
+    request: import('fastify').FastifyRequest<{
+      Params: { id: string };
+      Querystring: {
+        limit?: string | number;
+        offset?: string | number;
+        maxDepth?: string | number;
+        parentId?: string;
+      };
+    }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const reelId = String(request.params.id);
+    const viewerRow = request.auth?.userRow || null;
+    const access = resolveActiveReelForCommentAccess(reelId, viewerRow);
+    if ('status' in access) {
+      return reply.code(access.status).send({ error: { code: access.code, message: access.message } });
+    }
+    const reelRow = access.reel;
+    const viewerId = viewerRow?.id || null;
+    const relations = getViewerRelations(db, viewerId);
+    const limit = Math.min(50, Math.max(1, Number(request.query?.limit ?? 20) || 20));
+    const offset = Math.max(0, Number(request.query?.offset ?? 0) || 0);
+    const parsedMaxDepth = Number(request.query?.maxDepth);
+    const maxDepth = Number.isFinite(parsedMaxDepth)
+      ? Math.min(5, Math.max(0, parsedMaxDepth))
+      : DEFAULT_THREAD_REPLY_DEPTH;
+    const parentId = String(request.query?.parentId || '').trim() || null;
+
+    const rows = db
+      .prepare(`
+        SELECT rc.id, rc.reel_id AS thread_id, rc.reel_id, rc.author_id, rc.parent_comment_id,
+               rc.reply_to_user_id, rc.reply_to_username, rc.content,
+               COALESCE(rc.status, 'active') AS status, rc.deleted_at,
+               0 AS likes_count, rc.created_at_ms, rc.created_at,
+               u.username, u.avatar_initials AS initials
+        FROM reel_comments rc
+        JOIN users u ON u.id = rc.author_id
+        WHERE rc.reel_id = ? AND u.status != 'banned' AND u.status != 'deleted'
+        ORDER BY rc.created_at_ms ASC
+      `)
+      .all(reelId) as unknown as JoinedThreadReplyRow[];
+
+    const { childrenByParent } = filterVisibleReplyTree(rows, relations);
+    const reportedIds = getReportedThreadCommentIds(viewerId, 'reel_comment');
+    const activeCount = rows.filter(
+      (r) =>
+        (r.status || 'active') === 'active' &&
+        !relations.blockedIds.has(r.author_id) &&
+        !relations.blockedByIds.has(r.author_id) &&
+        !relations.mutedIds.has(r.author_id)
+    ).length;
+    const commentsEnabled = reelRow.comments_enabled === null ? true : Boolean(reelRow.comments_enabled);
+
+    if (parentId) {
+      const items = buildReplySubtree(parentId, childrenByParent, relations, 0, maxDepth, reportedIds);
+      return {
+        items,
+        total: items.length,
+        totalCount: activeCount,
+        hasMore: false,
+        nextOffset: items.length,
+        commentsEnabled,
+      };
+    }
+
+    const topLevel = buildReplySubtree('__root__', childrenByParent, relations, 0, maxDepth, reportedIds);
+    const nextOffset = Math.min(topLevel.length, offset + limit);
+    return {
+      items: topLevel.slice(offset, nextOffset),
+      total: topLevel.length,
+      totalCount: activeCount,
+      hasMore: nextOffset < topLevel.length,
+      nextOffset,
+      commentsEnabled,
+    };
+  };
+
+  app.get<{
+    Params: { id: string };
+    Querystring: {
+      limit?: string | number;
+      offset?: string | number;
+      maxDepth?: string | number;
+      parentId?: string;
+    };
+  }>('/api/v1/reels/:id/comments', { preHandler: auth.optionalAuth }, getReelCommentsHandler);
+  app.get<{
+    Params: { id: string };
+    Querystring: {
+      limit?: string | number;
+      offset?: string | number;
+      maxDepth?: string | number;
+      parentId?: string;
+    };
+  }>('/api/reels/:id/comments', { preHandler: auth.optionalAuth }, getReelCommentsHandler);
+
+  const createReelCommentHandler = async (
+    request: import('fastify').FastifyRequest<{
+      Params: { id: string };
+      Body: { content?: string; body?: string; parentCommentId?: string | null };
+    }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const viewer = request.auth!.userRow;
+    const rate = checkRateLimit(
+      db,
+      `reel_comment:${viewer.id}`,
+      SECURITY_LIMITS.REEL_COMMENTS_PER_MIN,
+      60_000
+    );
+    if (!rate.allowed) {
+      return reply.code(429).send({
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'Too many comments sent quickly. Please wait a moment.',
+        },
       });
     }
+
+    const reelId = String(request.params.id);
+    const access = resolveActiveReelForCommentAccess(reelId, viewer);
+    if ('status' in access) {
+      return reply.code(access.status).send({ error: { code: access.code, message: access.message } });
+    }
+    const reelRow = access.reel;
+
+    if (reelRow.comments_enabled === 0) {
+      return reply.code(403).send({
+        error: { code: 'COMMENTS_DISABLED', message: 'Comments are turned off for this reel.' },
+      });
+    }
+
+    const content = sanitizePlainTextComment(request.body?.content ?? request.body?.body);
+    if (!content) {
+      return reply
+        .code(400)
+        .send({ error: { code: 'EMPTY_COMMENT', message: 'Comment cannot be empty.' } });
+    }
+    if (content.length > SECURITY_LIMITS.REEL_COMMENT_MAX_CHARS) {
+      return reply.code(400).send({
+        error: {
+          code: 'COMMENT_TOO_LONG',
+          message: `Comments cannot exceed ${SECURITY_LIMITS.REEL_COMMENT_MAX_CHARS} characters.`,
+        },
+      });
+    }
+
+    const parentCommentId = request.body?.parentCommentId
+      ? String(request.body.parentCommentId).trim()
+      : null;
+    let replyToUserId: string | null = null;
+    let replyToUsername = '';
+
+    if (parentCommentId) {
+      const parentRow = db
+        .prepare(
+          `SELECT rc.id, rc.reel_id, rc.author_id, COALESCE(rc.status, 'active') AS status, u.username
+           FROM reel_comments rc
+           JOIN users u ON u.id = rc.author_id
+           WHERE rc.id = ?`
+        )
+        .get(parentCommentId) as
+        | {
+            id: string;
+            reel_id: string;
+            author_id: string;
+            status: string;
+            username: string;
+          }
+        | undefined;
+      if (!parentRow) {
+        return reply
+          .code(404)
+          .send({ error: { code: 'PARENT_NOT_FOUND', message: 'Parent comment not found.' } });
+      }
+      if (parentRow.reel_id !== reelId) {
+        return reply.code(400).send({
+          error: { code: 'INVALID_PARENT', message: 'Parent comment belongs to a different reel.' },
+        });
+      }
+      if (parentRow.status === 'deleted') {
+        return reply.code(400).send({
+          error: { code: 'PARENT_DELETED', message: 'Cannot reply to a deleted comment.' },
+        });
+      }
+      replyToUserId = parentRow.author_id;
+      replyToUsername = parentRow.username;
+    }
+
+    const id = 'rc_' + crypto.randomUUID().slice(0, 10);
+    const now = Date.now();
+    const createdAt = new Date(now).toISOString();
+    db.prepare(
+      `INSERT INTO reel_comments
+         (id, reel_id, author_id, parent_comment_id, reply_to_user_id, reply_to_username, content, status, created_at_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+    ).run(id, reelId, viewer.id, parentCommentId, replyToUserId, replyToUsername, content, now, createdAt);
+
+    const insertNotif = db.prepare(
+      'INSERT INTO notifications (id, recipient_id, actor_username, kind, title, target_type, target_id, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    if (replyToUserId && replyToUserId !== viewer.id) {
+      insertNotif.run(
+        'n_' + crypto.randomUUID().slice(0, 10),
+        replyToUserId,
+        viewer.username,
+        'reel_comment_reply',
+        `@${viewer.username} replied to your comment on a reel`,
+        'reel',
+        reelId,
+        now,
+        createdAt
+      );
+    }
+    if (reelRow.author_id !== viewer.id && reelRow.author_id !== replyToUserId) {
+      insertNotif.run(
+        'n_' + crypto.randomUUID().slice(0, 10),
+        reelRow.author_id,
+        viewer.username,
+        'reel_comment',
+        `@${viewer.username} commented on your reel`,
+        'reel',
+        reelId,
+        now,
+        createdAt
+      );
+    }
+
+    const commentsCount = countActiveReelComments(reelId);
+    return reply.code(201).send({
+      id,
+      reelId,
+      threadId: reelId,
+      parentCommentId,
+      replyToUserId,
+      replyToUsername,
+      username: viewer.username,
+      initials: viewer.avatar_initials,
+      content,
+      body: content,
+      timestamp: 'Just now',
+      createdAt,
+      likes: 0,
+      isDeleted: false,
+      hasMoreReplies: false,
+      hiddenReplyCount: 0,
+      reportedByMe: false,
+      replies: [],
+      commentsCount,
+    });
+  };
+
+  app.post<{
+    Params: { id: string };
+    Body: { content?: string; body?: string; parentCommentId?: string | null };
+  }>('/api/v1/reels/:id/comments', { preHandler: auth.requireAuth }, createReelCommentHandler);
+  app.post<{
+    Params: { id: string };
+    Body: { content?: string; body?: string; parentCommentId?: string | null };
+  }>('/api/reels/:id/comments', { preHandler: auth.requireAuth }, createReelCommentHandler);
+
+  const deleteReelCommentHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string; commentId: string } }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const viewer = request.auth!.userRow;
+    const reelId = String(request.params.id);
+    const commentId = String(request.params.commentId);
+
+    const access = resolveActiveReelForCommentAccess(reelId, viewer);
+    if ('status' in access) {
+      return reply.code(access.status).send({ error: { code: access.code, message: access.message } });
+    }
+    const reelRow = access.reel;
+
+    const commentRow = db
+      .prepare("SELECT id, reel_id, author_id, COALESCE(status, 'active') AS status FROM reel_comments WHERE id = ? AND reel_id = ?")
+      .get(commentId, reelId) as
+      | { id: string; reel_id: string; author_id: string; status: string }
+      | undefined;
+    if (!commentRow || commentRow.status === 'deleted') {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Comment not found.' } });
+    }
+
+    const canDelete =
+      commentRow.author_id === viewer.id ||
+      reelRow.author_id === viewer.id ||
+      viewer.role === 'admin';
+    if (!canDelete) {
+      return reply.code(403).send({
+        error: { code: 'FORBIDDEN', message: 'You can only delete your own comments or comments on your reel.' },
+      });
+    }
+
+    const hasChildren = Boolean(
+      db.prepare('SELECT 1 FROM reel_comments WHERE parent_comment_id = ? LIMIT 1').get(commentId)
+    );
+    const hasPendingReport = Boolean(
+      db
+        .prepare("SELECT 1 FROM reports WHERE target_type = 'reel_comment' AND target_id = ? AND status = 'pending' LIMIT 1")
+        .get(commentId)
+    );
+
+    if (hasChildren || hasPendingReport) {
+      db.prepare(
+        "UPDATE reel_comments SET status = 'deleted', content = '[deleted]', deleted_at = ? WHERE id = ?"
+      ).run(new Date().toISOString(), commentId);
+    } else {
+      db.prepare('DELETE FROM reel_comments WHERE id = ?').run(commentId);
+    }
+
+    return {
+      deleted: true,
+      softDeleted: hasChildren || hasPendingReport,
+      id: commentId,
+      commentsCount: countActiveReelComments(reelId),
+    };
+  };
+
+  app.delete<{ Params: { id: string; commentId: string } }>(
+    '/api/v1/reels/:id/comments/:commentId',
+    { preHandler: auth.requireAuth },
+    deleteReelCommentHandler
+  );
+  app.delete<{ Params: { id: string; commentId: string } }>(
+    '/api/reels/:id/comments/:commentId',
+    { preHandler: auth.requireAuth },
+    deleteReelCommentHandler
   );
 
   app.post<{ Params: { id: string } }>(
@@ -956,13 +1252,25 @@ export function registerSocialRoutes(
 
     const openReport = db
       .prepare(
-        "SELECT 1 FROM reports WHERE target_type = 'reel' AND target_id = ? AND status = 'pending' LIMIT 1"
+        `SELECT 1 FROM reports
+         WHERE status = 'pending'
+           AND (
+             (target_type = 'reel' AND target_id = ?)
+             OR (target_type = 'reel_comment' AND target_id IN (SELECT id FROM reel_comments WHERE reel_id = ?))
+           )
+         LIMIT 1`
       )
-      .get(reelId);
+      .get(reelId, reelId);
     const retainForModeration = Boolean(openReport);
 
     db.prepare('DELETE FROM reel_likes WHERE reel_id = ?').run(reelId);
-    db.prepare('DELETE FROM reel_comments WHERE reel_id = ?').run(reelId);
+    if (retainForModeration) {
+      db.prepare(
+        "UPDATE reel_comments SET status = 'deleted', content = '[deleted]', deleted_at = ? WHERE reel_id = ? AND status = 'active' AND id NOT IN (SELECT target_id FROM reports WHERE target_type = 'reel_comment' AND status = 'pending')"
+      ).run(new Date().toISOString(), reelId);
+    } else {
+      db.prepare('DELETE FROM reel_comments WHERE reel_id = ?').run(reelId);
+    }
     db.prepare('DELETE FROM reel_views WHERE reel_id = ?').run(reelId);
     db.prepare("DELETE FROM notifications WHERE target_type = 'reel' AND target_id = ?").run(reelId);
 
@@ -1049,14 +1357,17 @@ export function registerSocialRoutes(
     return total;
   };
 
-  const getReportedThreadCommentIds = (viewerId: string | null): Set<string> => {
+  const getReportedThreadCommentIds = (
+    viewerId: string | null,
+    targetType: 'thread_comment' | 'reel_comment' = 'thread_comment'
+  ): Set<string> => {
     const reported = new Set<string>();
     if (!viewerId) return reported;
     const rows = db
       .prepare(
-        "SELECT target_id FROM reports WHERE reporter_id = ? AND target_type = 'thread_comment' AND status != 'dismissed'"
+        "SELECT target_id FROM reports WHERE reporter_id = ? AND target_type = ? AND status != 'dismissed'"
       )
-      .all(viewerId) as Array<{ target_id: string }>;
+      .all(viewerId, targetType) as Array<{ target_id: string }>;
     for (const r of rows) reported.add(r.target_id);
     return reported;
   };
@@ -1089,6 +1400,7 @@ export function registerSocialRoutes(
       return {
         id: rep.id,
         threadId: rep.thread_id,
+        ...(rep.reel_id ? { reelId: rep.reel_id } : {}),
         parentCommentId: rep.parent_comment_id,
         replyToUserId: rep.reply_to_user_id,
         replyToUsername: rep.reply_to_username,
@@ -1992,7 +2304,15 @@ export function registerSocialRoutes(
   }>('/api/v1/reports', { preHandler: auth.requireAuth }, async (request, reply) => {
     const reporter = request.auth!.userRow;
     const body = request.body || {};
-    const targetType = ['post', 'comment', 'user', 'reel', 'thread', 'thread_comment'].includes(
+    const targetType = [
+      'post',
+      'comment',
+      'user',
+      'reel',
+      'thread',
+      'thread_comment',
+      'reel_comment',
+    ].includes(
       body.targetType || ''
     )
       ? String(body.targetType)
@@ -2009,18 +2329,29 @@ export function registerSocialRoutes(
         .send({ error: { code: 'MISSING_TARGET', message: 'Report target is required.' } });
     }
 
-    if (targetType === 'thread_comment') {
-      const commentRow = db
-        .prepare(
-          `SELECT tr.id, tr.thread_id, tr.author_id, tr.content, tr.status, u.username AS author_username
-           FROM thread_replies tr
-           JOIN users u ON u.id = tr.author_id
-           WHERE tr.id = ?`
-        )
-        .get(targetId) as
+    if (targetType === 'thread_comment' || targetType === 'reel_comment') {
+      const commentRow = (
+        targetType === 'reel_comment'
+          ? db
+              .prepare(
+                `SELECT rc.id, rc.reel_id AS parent_id, rc.author_id, rc.content, rc.status, u.username AS author_username
+                 FROM reel_comments rc
+                 JOIN users u ON u.id = rc.author_id
+                 WHERE rc.id = ?`
+              )
+              .get(targetId)
+          : db
+              .prepare(
+                `SELECT tr.id, tr.thread_id AS parent_id, tr.author_id, tr.content, tr.status, u.username AS author_username
+                 FROM thread_replies tr
+                 JOIN users u ON u.id = tr.author_id
+                 WHERE tr.id = ?`
+              )
+              .get(targetId)
+      ) as
         | {
             id: string;
-            thread_id: string;
+            parent_id: string;
             author_id: string;
             content: string;
             status: string;
@@ -2041,11 +2372,19 @@ export function registerSocialRoutes(
       if (!snippet) {
         snippet = String(commentRow.content || '').slice(0, 240);
       }
-      targetContext = JSON.stringify({
-        threadId: commentRow.thread_id,
-        commentId: commentRow.id,
-        authorUsername: commentRow.author_username,
-      });
+      targetContext = JSON.stringify(
+        targetType === 'reel_comment'
+          ? {
+              reelId: commentRow.parent_id,
+              commentId: commentRow.id,
+              authorUsername: commentRow.author_username,
+            }
+          : {
+              threadId: commentRow.parent_id,
+              commentId: commentRow.id,
+              authorUsername: commentRow.author_username,
+            }
+      );
     }
 
     const existing = db

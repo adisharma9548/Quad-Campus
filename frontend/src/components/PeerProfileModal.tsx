@@ -15,6 +15,7 @@ import { useToast } from '../context/ToastContext';
 import { IS_REAL_BACKEND, apiRequest, resolveApiMediaUrl } from '../services/apiClient';
 import { resolveReelDurationLabel } from '../utils/formatDuration';
 import { ReelCard } from '../screens/ReelsScreen';
+import ReelCommentsPanel from './ReelCommentsPanel';
 import type { PeerProfileData, PeerUser } from '../types/quad';
 
 const REEL_MUTE_STORAGE_KEY = 'quad_reels_muted';
@@ -37,6 +38,7 @@ export function PeerProfileModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewingReelId, setViewingReelId] = useState<string | number | null>(null);
+  const [reelCommentsOpen, setReelCommentsOpen] = useState(false);
   const [savedReels, setSavedReels] = useState<Record<string, boolean>>({});
   const [shareOffsets, setShareOffsets] = useState<Record<string, number>>({});
   const [isMuted, setIsMuted] = useState<boolean>(() => {
@@ -362,57 +364,66 @@ export function PeerProfileModal({
         return (
           <Modal
             isOpen={Boolean(viewingReel)}
-            onClose={() => setViewingReelId(null)}
+            onClose={() => {
+              setReelCommentsOpen(false);
+              setViewingReelId(null);
+            }}
             title={viewingReel ? `@${viewingReel.username}'s Reel` : 'Reel'}
-            size="lg"
+            size={reelCommentsOpen ? 'xl' : 'lg'}
           >
             {viewingReel && (
-              <div className="h-[68vh] max-h-[640px] flex items-center justify-center">
-                <ReelCard
+              <div className="flex flex-col lg:flex-row items-center justify-center gap-4">
+                <div className="h-[68vh] max-h-[640px] flex-1 min-w-0 flex items-center justify-center">
+                  <ReelCard
+                    reel={viewingReel}
+                    isInView
+                    isMuted={isMuted}
+                    onToggleMute={handleToggleMute}
+                    liked={Boolean(viewingReel.isLiked)}
+                    onToggleLike={async (id) => {
+                      const res = await toggleReelLike(id);
+                      if (res) {
+                        setProfile((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                reels: (prev.reels || []).map((r) =>
+                                  String(r.id) === String(id)
+                                    ? { ...r, likes: res.likes, isLiked: res.liked }
+                                    : r
+                                ),
+                              }
+                            : prev
+                        );
+                      }
+                    }}
+                    saved={Boolean(savedReels[String(viewingReel.id)])}
+                    onToggleSave={(id) => {
+                      const key = String(id);
+                      setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
+                    }}
+                    onOpenComments={() => setReelCommentsOpen((prev) => !prev)}
+                    onShare={(reel) => {
+                      const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
+                        String(reel.id)
+                      )}`;
+                      if (navigator.clipboard?.writeText) {
+                        navigator.clipboard.writeText(shareUrl).catch(() => {});
+                      }
+                      setShareOffsets((prev) => ({
+                        ...prev,
+                        [String(reel.id)]: (prev[String(reel.id)] || 0) + 1,
+                      }));
+                      showToast(`Copied link to @${reel.username}'s reel`, 'success');
+                    }}
+                    shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
+                  />
+                </div>
+                <ReelCommentsPanel
                   reel={viewingReel}
-                  isInView
-                  isMuted={isMuted}
-                  onToggleMute={handleToggleMute}
-                  liked={Boolean(viewingReel.isLiked)}
-                  onToggleLike={async (id) => {
-                    const res = await toggleReelLike(id);
-                    if (res) {
-                      setProfile((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              reels: (prev.reels || []).map((r) =>
-                                String(r.id) === String(id)
-                                  ? { ...r, likes: res.likes, isLiked: res.liked }
-                                  : r
-                              ),
-                            }
-                          : prev
-                      );
-                    }
-                  }}
-                  saved={Boolean(savedReels[String(viewingReel.id)])}
-                  onToggleSave={(id) => {
-                    const key = String(id);
-                    setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
-                  }}
-                  onOpenComments={() => {
-                    showToast('Open Campus Reels to read or post comments on this reel', 'info');
-                  }}
-                  onShare={(reel) => {
-                    const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
-                      String(reel.id)
-                    )}`;
-                    if (navigator.clipboard?.writeText) {
-                      navigator.clipboard.writeText(shareUrl).catch(() => {});
-                    }
-                    setShareOffsets((prev) => ({
-                      ...prev,
-                      [String(reel.id)]: (prev[String(reel.id)] || 0) + 1,
-                    }));
-                    showToast(`Copied link to @${reel.username}'s reel`, 'success');
-                  }}
-                  shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
+                  isOpen={reelCommentsOpen}
+                  onClose={() => setReelCommentsOpen(false)}
+                  mode="embedded"
                 />
               </div>
             )}

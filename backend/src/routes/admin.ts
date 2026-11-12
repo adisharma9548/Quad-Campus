@@ -277,16 +277,17 @@ export function registerAdminRoutes(
         db.prepare(
           "UPDATE posts SET status = 'deleted', deleted_reason = ?, deleted_at = ? WHERE id = ?"
         ).run(reason, nowIso, rep.target_id);
-      } else if (rep.target_type === 'thread_comment') {
+      } else if (rep.target_type === 'thread_comment' || rep.target_type === 'reel_comment') {
+        const tableName = rep.target_type === 'reel_comment' ? 'reel_comments' : 'thread_replies';
         const hasChild = db
-          .prepare('SELECT 1 FROM thread_replies WHERE parent_comment_id = ? LIMIT 1')
+          .prepare(`SELECT 1 FROM ${tableName} WHERE parent_comment_id = ? LIMIT 1`)
           .get(rep.target_id);
         if (hasChild) {
           db.prepare(
-            "UPDATE thread_replies SET status = 'deleted', content = '[deleted]', deleted_at = ? WHERE id = ?"
+            `UPDATE ${tableName} SET status = 'deleted', content = '[deleted]', deleted_at = ? WHERE id = ?`
           ).run(nowIso, rep.target_id);
         } else {
-          db.prepare('DELETE FROM thread_replies WHERE id = ?').run(rep.target_id);
+          db.prepare(`DELETE FROM ${tableName} WHERE id = ?`).run(rep.target_id);
         }
       } else if (rep.target_type === 'reel') {
         db.prepare("UPDATE reels SET status = 'deleted' WHERE id = ?").run(rep.target_id);

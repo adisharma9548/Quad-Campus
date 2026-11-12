@@ -22,6 +22,7 @@ import { useToast } from '../context/ToastContext';
 import { resolveApiMediaUrl } from '../services/apiClient';
 import { resolveReelDurationLabel } from '../utils/formatDuration';
 import { ReelCard } from './ReelsScreen';
+import ReelCommentsPanel from '../components/ReelCommentsPanel';
 import type { ReelItem } from '../types/quad';
 import {
   Avatar,
@@ -55,6 +56,7 @@ export default function PersonalSpaceScreen({
   const [deleteConfirmReel, setDeleteConfirmReel] = useState<ReelItem | null>(null);
   const [isDeletingReel, setIsDeletingReel] = useState(false);
   const [viewingReelId, setViewingReelId] = useState<string | number | null>(null);
+  const [reelCommentsOpen, setReelCommentsOpen] = useState(false);
   const [savedReels, setSavedReels] = useState<Record<string, boolean>>({});
   const [shareOffsets, setShareOffsets] = useState<Record<string, number>>({});
   const [isMuted, setIsMuted] = useState<boolean>(() => {
@@ -540,45 +542,54 @@ export default function PersonalSpaceScreen({
       {/* Reel Viewer Modal */}
       <Modal
         isOpen={Boolean(viewingReel)}
-        onClose={() => setViewingReelId(null)}
+        onClose={() => {
+          setReelCommentsOpen(false);
+          setViewingReelId(null);
+        }}
         title={viewingReel ? `@${viewingReel.username}'s Reel` : 'Reel'}
-        size="lg"
+        size={reelCommentsOpen ? 'xl' : 'lg'}
       >
         {viewingReel && (
           <div className="space-y-3">
-            <div className="h-[68vh] max-h-[640px] flex items-center justify-center">
-              <ReelCard
+            <div className="flex flex-col lg:flex-row items-center justify-center gap-4">
+              <div className="h-[68vh] max-h-[640px] flex-1 min-w-0 flex items-center justify-center">
+                <ReelCard
+                  reel={viewingReel}
+                  isInView
+                  isMuted={isMuted}
+                  onToggleMute={handleToggleMute}
+                  liked={Boolean(viewingReel.isLiked)}
+                  onToggleLike={async (id) => {
+                    await toggleReelLike(id);
+                  }}
+                  saved={Boolean(savedReels[String(viewingReel.id)])}
+                  onToggleSave={(id) => {
+                    const key = String(id);
+                    setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
+                  }}
+                  onOpenComments={() => setReelCommentsOpen((prev) => !prev)}
+                  onOpenProfile={onOpenPeerProfile}
+                  onShare={(reel) => {
+                    const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
+                      String(reel.id)
+                    )}`;
+                    if (navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(shareUrl).catch(() => {});
+                    }
+                    setShareOffsets((prev) => ({
+                      ...prev,
+                      [String(reel.id)]: (prev[String(reel.id)] || 0) + 1,
+                    }));
+                    showToast(`Copied link to @${reel.username}'s reel`, 'success');
+                  }}
+                  shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
+                />
+              </div>
+              <ReelCommentsPanel
                 reel={viewingReel}
-                isInView
-                isMuted={isMuted}
-                onToggleMute={handleToggleMute}
-                liked={Boolean(viewingReel.isLiked)}
-                onToggleLike={async (id) => {
-                  await toggleReelLike(id);
-                }}
-                saved={Boolean(savedReels[String(viewingReel.id)])}
-                onToggleSave={(id) => {
-                  const key = String(id);
-                  setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
-                }}
-                onOpenComments={() => {
-                  showToast('Open Campus Reels to read or post comments on this reel', 'info');
-                }}
-                onOpenProfile={onOpenPeerProfile}
-                onShare={(reel) => {
-                  const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
-                    String(reel.id)
-                  )}`;
-                  if (navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(shareUrl).catch(() => {});
-                  }
-                  setShareOffsets((prev) => ({
-                    ...prev,
-                    [String(reel.id)]: (prev[String(reel.id)] || 0) + 1,
-                  }));
-                  showToast(`Copied link to @${reel.username}'s reel`, 'success');
-                }}
-                shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
+                isOpen={reelCommentsOpen}
+                onClose={() => setReelCommentsOpen(false)}
+                mode="embedded"
               />
             </div>
             <div className="flex items-center justify-between pt-2 border-t border-ink/12">

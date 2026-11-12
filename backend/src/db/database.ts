@@ -49,11 +49,31 @@ function migrate(db: DatabaseSync): void {
     'CREATE INDEX IF NOT EXISTS idx_thread_replies_thread_parent ON thread_replies(thread_id, parent_comment_id, created_at_ms ASC)'
   );
 
-  // Ensure reports table CHECK constraint includes 'thread_comment' and has target_context column
+  // Additive Part C+D nested reel comments columns + index
+  if (!hasColumn(db, 'reel_comments', 'parent_comment_id')) {
+    db.exec('ALTER TABLE reel_comments ADD COLUMN parent_comment_id TEXT');
+  }
+  if (!hasColumn(db, 'reel_comments', 'reply_to_user_id')) {
+    db.exec('ALTER TABLE reel_comments ADD COLUMN reply_to_user_id TEXT');
+  }
+  if (!hasColumn(db, 'reel_comments', 'reply_to_username')) {
+    db.exec("ALTER TABLE reel_comments ADD COLUMN reply_to_username TEXT DEFAULT ''");
+  }
+  if (!hasColumn(db, 'reel_comments', 'status')) {
+    db.exec("ALTER TABLE reel_comments ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+  }
+  if (!hasColumn(db, 'reel_comments', 'deleted_at')) {
+    db.exec('ALTER TABLE reel_comments ADD COLUMN deleted_at TEXT');
+  }
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_reel_comments_reel_parent ON reel_comments(reel_id, parent_comment_id, created_at_ms ASC)'
+  );
+
+  // Ensure reports table CHECK constraint includes 'thread_comment' and 'reel_comment' and has target_context column
   const reportsMeta = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'reports'")
     .get() as { sql?: string } | undefined;
-  if (reportsMeta?.sql && !reportsMeta.sql.includes('thread_comment')) {
+  if (reportsMeta?.sql && !reportsMeta.sql.includes('reel_comment')) {
     const hasCtxCol = hasColumn(db, 'reports', 'target_context');
     const ctxExpr = hasCtxCol ? "COALESCE(target_context, '')" : "''";
     db.exec(`
@@ -61,7 +81,7 @@ function migrate(db: DatabaseSync): void {
       CREATE TABLE reports_migrated (
         id TEXT PRIMARY KEY,
         reporter_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        target_type TEXT NOT NULL CHECK (target_type IN ('post', 'comment', 'user', 'reel', 'thread', 'thread_comment')),
+        target_type TEXT NOT NULL CHECK (target_type IN ('post', 'comment', 'user', 'reel', 'thread', 'thread_comment', 'reel_comment')),
         target_id TEXT NOT NULL,
         reason TEXT NOT NULL,
         details TEXT DEFAULT '',
