@@ -543,3 +543,26 @@ html.dark .quad-floating-header--reels > div > div:last-child {
     bottom: 14px;
   }
 }
+
+.quad-action-menu-popover {
+  width: 228px;
+}
+
+/* Part C+D / E: Align desktop vs mobile comments sheet breakpoint at 1024px & 60% sheet cap */
+.quad-reel-comments-mobile-sheet {
+  height: 60dvh;
+  max-height: 60dvh;
+}
+
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+  .quad-reel-comments-desktop {
+    display: flex;
+    flex-direction: column;
+    width: 340px;
+    flex-shrink: 0;
+  }
+
+  .quad-reel-comments-mobile-wrap {
+    display: none;
+  }
+}

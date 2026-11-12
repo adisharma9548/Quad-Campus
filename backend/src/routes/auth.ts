@@ -23,6 +23,7 @@ import {
 import { canViewerSeePost } from '../algorithms/campusRanker.ts';
 import { loadAllPostsWithStats, serializePostForResponse } from './feed.ts';
 import { loadReelsWithStats } from './social.ts';
+import { attachReelFollowStatus } from '../utils/reelCommentService.ts';
 import { getDiscoverableUsers } from '../services/discovery.ts';
 import type { AuthMiddleware, LoginAttemptRow, UserRow } from '../types.ts';
 import { hashPassword, signSessionToken, verifyPasswordHash } from '../utils/crypto.ts';
@@ -727,7 +728,7 @@ export function registerAuthRoutes(
         ? allPosts.filter((p) => p.space === 'personal').slice(0, 20).map(serializePostForResponse)
         : [];
 
-      const peerReels = loadReelsWithStats(db, viewerRow.id)
+      const peerReels = attachReelFollowStatus(db, viewerRow.id, loadReelsWithStats(db, viewerRow.id))
         .filter((r) => {
           if (r.authorId !== target.id) return false;
           if (isSelf) return r.status !== 'deleted';

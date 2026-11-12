@@ -109,21 +109,55 @@ export function removeReplyFromTree(
 export function mergeBranchChildren(
   nodes: ThreadReply[],
   parentCommentId: string | number,
-  children: ThreadReply[]
+  children: ThreadReply[],
+  options?: {
+    append?: boolean;
+    hasMore?: boolean;
+    remainingCount?: number;
+    nextCursor?: string | null;
+  }
 ): ThreadReply[] {
   return nodes.map((node) => {
     if (String(node.id) === String(parentCommentId)) {
+      const existing = options?.append ? node.replies || [] : [];
+      const seen = new Set(existing.map((c) => String(c.id)));
+      const merged = [...existing, ...children.filter((c) => !seen.has(String(c.id)))];
       return {
         ...node,
-        replies: children,
-        hasMoreReplies: false,
-        hiddenReplyCount: 0,
+        replies: merged,
+        hasMoreReplies: Boolean(options?.hasMore),
+        hiddenReplyCount: options?.hasMore ? Math.max(0, options?.remainingCount ?? 0) : 0,
+        nextRepliesCursor: options?.nextCursor ?? null,
       };
     }
     if (node.replies && node.replies.length > 0) {
       return {
         ...node,
-        replies: mergeBranchChildren(node.replies, parentCommentId, children),
+        replies: mergeBranchChildren(node.replies, parentCommentId, children, options),
+      };
+    }
+    return node;
+  });
+}
+
+export function setReplyLikeInTree(
+  nodes: ThreadReply[],
+  targetId: string | number,
+  likedByMe: boolean,
+  likes: number
+): ThreadReply[] {
+  return nodes.map((node) => {
+    const matches = String(node.id) === String(targetId);
+    const updatedChildren =
+      node.replies && node.replies.length > 0
+        ? setReplyLikeInTree(node.replies, targetId, likedByMe, likes)
+        : node.replies;
+    if (matches || updatedChildren !== node.replies) {
+      return {
+        ...node,
+        likes: matches ? likes : node.likes,
+        likedByMe: matches ? likedByMe : node.likedByMe,
+        replies: updatedChildren,
       };
     }
     return node;

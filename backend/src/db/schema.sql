@@ -299,3 +299,20 @@ CREATE TABLE IF NOT EXISTS this_week_events (
   details TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS dismissed_reels (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reel_id TEXT NOT NULL REFERENCES reels(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, reel_id)
+);
+
+CREATE TABLE IF NOT EXISTS reel_comment_likes (
+  comment_id TEXT NOT NULL REFERENCES reel_comments(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (comment_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reel_comment_likes_comment ON reel_comment_likes(comment_id);
+CREATE INDEX IF NOT EXISTS idx_reel_comment_likes_user ON reel_comment_likes(user_id);

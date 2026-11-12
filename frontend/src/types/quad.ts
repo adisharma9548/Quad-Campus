@@ -103,6 +103,7 @@ export interface ReelItem {
   commentsEnabled?: boolean;
   mentions?: string[];
   hashtags?: string[];
+  followStatus?: 'self' | 'following' | 'requested' | 'none';
 }
 
 export interface ReelCommentItem extends ThreadReply {
@@ -149,9 +150,11 @@ export interface ThreadReply {
   timestamp: string;
   createdAt?: string;
   likes?: number;
+  likedByMe?: boolean;
   isDeleted?: boolean;
   hasMoreReplies?: boolean;
   hiddenReplyCount?: number;
+  nextRepliesCursor?: string | null;
   reportedByMe?: boolean;
   replies?: ThreadReply[];
 }

@@ -157,6 +157,8 @@ export interface AppContextValue {
   togglePostLike: (postId: string | number) => Promise<{ likes: number; liked: boolean } | null>;
   togglePostSave: (postId: string | number) => Promise<{ saved: boolean } | null>;
   hidePost: (postId: string | number) => Promise<void>;
+  hideReel: (reelId: string | number) => Promise<void>;
+  unhideReel: (reelId: string | number) => Promise<void>;
   muteAuthor: (username: string) => Promise<void>;
   unmuteAuthor: (username: string) => Promise<void>;
   blockAuthor: (username: string, reason?: string) => Promise<void>;
@@ -710,9 +712,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const muteAuthor = useCallback(async (username: string) => {
+    const clean = username.toLowerCase();
     setState((prev) => ({
       ...prev,
-      publicPosts: (prev.publicPosts || []).filter((p) => p.username !== username),
+      publicPosts: (prev.publicPosts || []).filter((p) => p.username.toLowerCase() !== clean),
+      reels: (prev.reels || []).filter((r) => r.username.toLowerCase() !== clean),
     }));
     if (IS_REAL_BACKEND) {
       await apiRequest('/mutes', { method: 'POST', body: { username } });
@@ -732,11 +736,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refreshFeed]);
 
   const blockAuthor = useCallback(async (username: string, reason = 'User privacy preference') => {
+    const clean = username.toLowerCase();
     setState((prev) => ({
       ...prev,
-      publicPosts: (prev.publicPosts || []).filter((p) => p.username !== username),
-      discoverableUsers: (prev.discoverableUsers || []).filter((u) => u.username !== username),
-      whoToFollow: (prev.whoToFollow || []).filter((u) => u.username !== username),
+      publicPosts: (prev.publicPosts || []).filter((p) => p.username.toLowerCase() !== clean),
+      reels: (prev.reels || []).filter((r) => r.username.toLowerCase() !== clean),
+      discoverableUsers: (prev.discoverableUsers || []).filter((u) => u.username.toLowerCase() !== clean),
+      whoToFollow: (prev.whoToFollow || []).filter((u) => u.username.toLowerCase() !== clean),
     }));
     if (IS_REAL_BACKEND) {
       await apiRequest('/blocks', { method: 'POST', body: { username, reason } });
@@ -1171,6 +1177,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshDirectory, refreshWhoToFollow, updateProfile, user]);
 
+  const hideReel = useCallback(async (reelId: string | number) => {
+    setState((prev) => ({
+      ...prev,
+      reels: (prev.reels || []).filter((r) => String(r.id) !== String(reelId)),
+    }));
+    if (IS_REAL_BACKEND) {
+      await apiRequest(`/reels/${encodeURIComponent(String(reelId))}/hide`, { method: 'POST' });
+    }
+  }, []);
+
+  const unhideReel = useCallback(async (reelId: string | number) => {
+    if (IS_REAL_BACKEND) {
+      await apiRequest(`/reels/${encodeURIComponent(String(reelId))}/hide`, { method: 'DELETE' });
+      const res = await apiRequest<{ items?: ReelItem[] }>('/reels');
+      if (Array.isArray(res.items)) {
+        setState((prev) => ({ ...prev, reels: res.items! }));
+      }
+    }
+  }, []);
+
   const requestFollow = useCallback(async (username: string) => {
     if (!IS_REAL_BACKEND) {
       setState((prev) => ({
@@ -1602,6 +1628,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         respondFollowRequest,
         removeFollower,
         unfollowUser,
+        hideReel,
+        unhideReel,
         createThread,
         toggleThreadLike,
         addThreadReply,

@@ -100,6 +100,7 @@ export interface ViewerRelations {
   blockedByIds: Set<string>;
   mutedIds: Set<string>;
   dismissedPostIds: Set<string>;
+  dismissedReelIds?: Set<string>;
   dismissedTopics: string[];
 }
 
@@ -213,6 +214,7 @@ export interface ReelItem {
   hashtags: string[];
   status: string;
   processingError?: string | null;
+  followStatus?: 'self' | 'following' | 'requested' | 'none';
   createdAtMs: number;
   score?: number;
 }

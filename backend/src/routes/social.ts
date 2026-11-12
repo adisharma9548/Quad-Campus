@@ -21,6 +21,7 @@ import {
   streamDiskMediaFile,
   transcodeReelVideo,
 } from '../utils/videoProcessor.ts';
+import { attachReelFollowStatus, queryReelComments } from '../utils/reelCommentService.ts';
 
 interface JoinedReelRow {
   id: string;
@@ -353,7 +354,7 @@ export function registerSocialRoutes(
         }
       : null;
     const relations = getViewerRelations(db, viewer?.id || null);
-    const raw = loadReelsWithStats(db, viewer?.id || null);
+    const raw = attachReelFollowStatus(db, viewer?.id || null, loadReelsWithStats(db, viewer?.id || null));
     const ranked = rankCampusReels({ reels: raw, viewer, relations });
     const total = ranked.length;
     const hasExplicitLimit = query.limit !== undefined;
@@ -387,7 +388,11 @@ export function registerSocialRoutes(
     if (!row || !canViewerAccessReelMedia(row, viewerRow)) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
     }
-    const item = loadReelsWithStats(db, viewerRow?.id || null).find((r) => r.id === reelId);
+    const item = attachReelFollowStatus(
+      db,
+      viewerRow?.id || null,
+      loadReelsWithStats(db, viewerRow?.id || null)
+    ).find((r) => r.id === reelId);
     if (!item) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
     }
@@ -731,7 +736,9 @@ export function registerSocialRoutes(
       })();
       trackBackgroundTask(bgTask);
 
-      const created = loadReelsWithStats(db, viewer.id).find((r) => r.id === id);
+      const created = attachReelFollowStatus(db, viewer.id, loadReelsWithStats(db, viewer.id)).find(
+        (r) => r.id === id
+      );
       if (!created) {
         return reply.code(500).send({ error: { code: 'CREATE_FAILED', message: 'Unable to load created reel.' } });
       }
@@ -794,6 +801,124 @@ export function registerSocialRoutes(
   registerReelDiskMediaRoute('thumbnail', 'thumbnail_path', 'image/jpeg');
   registerReelDiskMediaRoute('cover', 'cover_path', 'image/jpeg');
 
+  const hideReelHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string } }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const viewer = request.auth!.userRow;
+    const rl = checkRateLimit(db, `reel_hide:${viewer.id}`, 60, 60_000);
+    if (!rl.allowed) {
+      return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Slow down a moment.' } });
+    }
+    const reelId = String(request.params.id);
+    const reel = db
+      .prepare("SELECT id, author_id, status FROM reels WHERE id = ? AND status = 'active'")
+      .get(reelId) as { id: string; author_id: string; status: string } | undefined;
+    if (!reel) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+    }
+    if (reel.author_id === viewer.id) {
+      return reply.code(400).send({
+        error: { code: 'SELF_ACTION', message: 'You cannot hide your own reel.' },
+      });
+    }
+    db.prepare(
+      'INSERT OR IGNORE INTO dismissed_reels (user_id, reel_id, created_at) VALUES (?, ?, ?)'
+    ).run(viewer.id, reelId, new Date().toISOString());
+    return { ok: true, hidden: true };
+  };
+
+  const unhideReelHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string } }>
+  ) => {
+    const viewer = request.auth!.userRow;
+    const reelId = String(request.params.id);
+    db.prepare('DELETE FROM dismissed_reels WHERE user_id = ? AND reel_id = ?').run(viewer.id, reelId);
+    return { ok: true, hidden: false };
+  };
+
+  app.post<{ Params: { id: string } }>('/api/v1/reels/:id/hide', { preHandler: auth.requireAuth }, hideReelHandler);
+  app.post<{ Params: { id: string } }>('/api/reels/:id/hide', { preHandler: auth.requireAuth }, hideReelHandler);
+  app.delete<{ Params: { id: string } }>('/api/v1/reels/:id/hide', { preHandler: auth.requireAuth }, unhideReelHandler);
+  app.delete<{ Params: { id: string } }>('/api/reels/:id/hide', { preHandler: auth.requireAuth }, unhideReelHandler);
+
+  const toggleReelCommentLikeHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string; commentId: string } }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const viewer = request.auth!.userRow;
+    const rl = checkRateLimit(db, `reel_comment_like:${viewer.id}`, 80, 60_000);
+    if (!rl.allowed) {
+      return reply.code(429).send({ error: { code: 'RATE_LIMITED', message: 'Slow down a moment.' } });
+    }
+    const reelId = String(request.params.id);
+    const commentId = String(request.params.commentId);
+    const reelRow = db
+      .prepare('SELECT id, author_id, status, audience FROM reels WHERE id = ?')
+      .get(reelId) as { id: string; author_id: string; status: string; audience: string | null } | undefined;
+    if (!reelRow || reelRow.status !== 'active') {
+      return reply.code(404).send({ error: { code: 'REEL_NOT_FOUND', message: 'Reel not found.' } });
+    }
+    const blocked = db
+      .prepare(
+        'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)'
+      )
+      .get(viewer.id, reelRow.author_id, reelRow.author_id, viewer.id);
+    if (blocked) {
+      return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Reel access restricted.' } });
+    }
+    if (reelRow.audience === 'followers' && reelRow.author_id !== viewer.id && viewer.role !== 'admin') {
+      const follows = db
+        .prepare('SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?')
+        .get(viewer.id, reelRow.author_id);
+      if (!follows) {
+        return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Reel access restricted.' } });
+      }
+    }
+    const commentRow = db
+      .prepare('SELECT id, status FROM reel_comments WHERE id = ? AND reel_id = ?')
+      .get(commentId, reelId) as { id: string; status: string } | undefined;
+    if (!commentRow || commentRow.status !== 'active') {
+      return reply.code(404).send({ error: { code: 'COMMENT_NOT_FOUND', message: 'Comment not found.' } });
+    }
+    const existing = db
+      .prepare('SELECT 1 FROM reel_comment_likes WHERE comment_id = ? AND user_id = ?')
+      .get(commentId, viewer.id);
+    let liked = false;
+    if (existing) {
+      db.prepare('DELETE FROM reel_comment_likes WHERE comment_id = ? AND user_id = ?').run(
+        commentId,
+        viewer.id
+      );
+      liked = false;
+    } else {
+      db.prepare(
+        'INSERT INTO reel_comment_likes (comment_id, user_id, created_at) VALUES (?, ?, ?)'
+      ).run(commentId, viewer.id, new Date().toISOString());
+      liked = true;
+    }
+    const countRow = db
+      .prepare('SELECT COUNT(*) AS cnt FROM reel_comment_likes WHERE comment_id = ?')
+      .get(commentId) as { cnt: number };
+    return {
+      ok: true,
+      commentId,
+      liked,
+      likes: Number(countRow?.cnt || 0),
+    };
+  };
+
+  app.post<{ Params: { id: string; commentId: string } }>(
+    '/api/v1/reels/:id/comments/:commentId/like',
+    { preHandler: auth.requireAuth },
+    toggleReelCommentLikeHandler
+  );
+  app.post<{ Params: { id: string; commentId: string } }>(
+    '/api/reels/:id/comments/:commentId/like',
+    { preHandler: auth.requireAuth },
+    toggleReelCommentLikeHandler
+  );
+
   const resolveActiveReelForCommentAccess = (
     reelId: string,
     viewerRow: { id: string; role?: UserRole } | null
@@ -843,8 +968,10 @@ export function registerSocialRoutes(
     request: import('fastify').FastifyRequest<{
       Params: { id: string };
       Querystring: {
+        sort?: string;
         limit?: string | number;
         offset?: string | number;
+        cursor?: string;
         maxDepth?: string | number;
         parentId?: string;
       };
@@ -858,8 +985,6 @@ export function registerSocialRoutes(
       return reply.code(access.status).send({ error: { code: access.code, message: access.message } });
     }
     const reelRow = access.reel;
-    const viewerId = viewerRow?.id || null;
-    const relations = getViewerRelations(db, viewerId);
     const limit = Math.min(50, Math.max(1, Number(request.query?.limit ?? 20) || 20));
     const offset = Math.max(0, Number(request.query?.offset ?? 0) || 0);
     const parsedMaxDepth = Number(request.query?.maxDepth);
@@ -867,61 +992,28 @@ export function registerSocialRoutes(
       ? Math.min(5, Math.max(0, parsedMaxDepth))
       : DEFAULT_THREAD_REPLY_DEPTH;
     const parentId = String(request.query?.parentId || '').trim() || null;
-
-    const rows = db
-      .prepare(`
-        SELECT rc.id, rc.reel_id AS thread_id, rc.reel_id, rc.author_id, rc.parent_comment_id,
-               rc.reply_to_user_id, rc.reply_to_username, rc.content,
-               COALESCE(rc.status, 'active') AS status, rc.deleted_at,
-               0 AS likes_count, rc.created_at_ms, rc.created_at,
-               u.username, u.avatar_initials AS initials
-        FROM reel_comments rc
-        JOIN users u ON u.id = rc.author_id
-        WHERE rc.reel_id = ? AND u.status != 'banned' AND u.status != 'deleted'
-        ORDER BY rc.created_at_ms ASC
-      `)
-      .all(reelId) as unknown as JoinedThreadReplyRow[];
-
-    const { childrenByParent } = filterVisibleReplyTree(rows, relations);
-    const reportedIds = getReportedThreadCommentIds(viewerId, 'reel_comment');
-    const activeCount = rows.filter(
-      (r) =>
-        (r.status || 'active') === 'active' &&
-        !relations.blockedIds.has(r.author_id) &&
-        !relations.blockedByIds.has(r.author_id) &&
-        !relations.mutedIds.has(r.author_id)
-    ).length;
     const commentsEnabled = reelRow.comments_enabled === null ? true : Boolean(reelRow.comments_enabled);
 
-    if (parentId) {
-      const items = buildReplySubtree(parentId, childrenByParent, relations, 0, maxDepth, reportedIds);
-      return {
-        items,
-        total: items.length,
-        totalCount: activeCount,
-        hasMore: false,
-        nextOffset: items.length,
-        commentsEnabled,
-      };
-    }
-
-    const topLevel = buildReplySubtree('__root__', childrenByParent, relations, 0, maxDepth, reportedIds);
-    const nextOffset = Math.min(topLevel.length, offset + limit);
-    return {
-      items: topLevel.slice(offset, nextOffset),
-      total: topLevel.length,
-      totalCount: activeCount,
-      hasMore: nextOffset < topLevel.length,
-      nextOffset,
+    return queryReelComments(db, {
+      reelId: reelRow.id,
+      viewerId: viewerRow?.id || null,
       commentsEnabled,
-    };
+      sort: request.query?.sort || 'top',
+      parentId,
+      limit,
+      offset,
+      cursor: request.query?.cursor || null,
+      maxDepth,
+    });
   };
 
   app.get<{
     Params: { id: string };
     Querystring: {
+      sort?: string;
       limit?: string | number;
       offset?: string | number;
+      cursor?: string;
       maxDepth?: string | number;
       parentId?: string;
     };
@@ -929,8 +1021,10 @@ export function registerSocialRoutes(
   app.get<{
     Params: { id: string };
     Querystring: {
+      sort?: string;
       limit?: string | number;
       offset?: string | number;
+      cursor?: string;
       maxDepth?: string | number;
       parentId?: string;
     };
@@ -2223,8 +2317,11 @@ export function registerSocialRoutes(
       const target = db
         .prepare('SELECT id FROM users WHERE username = ?')
         .get(targetHandle) as { id: string } | undefined;
-      if (!target || target.id === blockerId) {
+      if (!target) {
         return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'User not found.' } });
+      }
+      if (target.id === blockerId) {
+        return reply.code(400).send({ error: { code: 'SELF_ACTION', message: 'You cannot block yourself.' } });
       }
       // Block never notifies the blocked person; also tears down bidirectional follows cleanly
       db.prepare(
@@ -2263,8 +2360,11 @@ export function registerSocialRoutes(
       const target = db
         .prepare('SELECT id FROM users WHERE username = ?')
         .get(targetHandle) as { id: string } | undefined;
-      if (!target || target.id === muterId) {
+      if (!target) {
         return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'User not found.' } });
+      }
+      if (target.id === muterId) {
+        return reply.code(400).send({ error: { code: 'SELF_ACTION', message: 'You cannot mute yourself.' } });
       }
       db.prepare('INSERT OR REPLACE INTO mutes (muter_id, muted_id, created_at) VALUES (?, ?, ?)').run(
         muterId,

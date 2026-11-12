@@ -6,9 +6,11 @@ import {
   Trash2,
   Flag,
   Send,
+  Heart,
 } from 'lucide-react';
 import type { ThreadReply } from '../types/quad';
 import { Avatar, Button } from './ui';
+import ContentActionMenu from './ContentActionMenu';
 import { countDescendants } from '../utils/threadTree';
 
 const MAX_VISUAL_INDENT_DEPTH = 8;
@@ -27,10 +29,18 @@ export interface ThreadCommentNodeProps {
     text: string
   ) => Promise<void>;
   onDeleteComment: (threadId: string | number, replyId: string | number) => Promise<void>;
-  onLoadMoreReplies: (threadId: string | number, parentCommentId: string | number) => Promise<void>;
+  onLoadMoreReplies: (
+    threadId: string | number,
+    parentCommentId: string | number,
+    cursor?: string | null
+  ) => Promise<void>;
+  onToggleLike?: (threadId: string | number, commentId: string | number) => Promise<void>;
   onReportComment?: (threadId: string | number, comment: ThreadReply) => void;
+  onReportedComment?: (commentId: string | number) => void;
   onUndoReport?: (threadId: string | number, comment: ThreadReply) => void;
+  onActionMenuOpenChange?: (open: boolean) => void;
   canDeleteComment?: (comment: ThreadReply) => boolean;
+  variant?: 'thread' | 'reel';
   domIdPrefix?: string;
   maxLength?: number;
 }
@@ -45,9 +55,13 @@ export default function ThreadCommentNode({
   onReplySubmit,
   onDeleteComment,
   onLoadMoreReplies,
+  onToggleLike,
   onReportComment,
+  onReportedComment,
   onUndoReport,
+  onActionMenuOpenChange,
   canDeleteComment,
+  variant = 'thread',
   domIdPrefix = 'thread-comment',
   maxLength = 2000,
 }: ThreadCommentNodeProps) {
@@ -113,17 +127,256 @@ export default function ThreadCommentNode({
     }
   };
 
-  const handleLoadMore = async () => {
+  const handleLoadMore = async (cursor?: string | null) => {
     if (loadingBranch) return;
     setLoadingBranch(true);
     try {
-      await onLoadMoreReplies(threadId, node.id);
+      await onLoadMoreReplies(threadId, node.id, cursor);
     } finally {
       setLoadingBranch(false);
     }
   };
 
+  const likesCount = Math.max(0, Number(node.likes ?? 0));
+  const hiddenReplyCount = Math.max(
+    children.length > 0 ? children.length : 0,
+    Number(node.hiddenReplyCount ?? 0)
+  );
+
   void onUndoReport;
+
+  if (variant === 'reel') {
+    return (
+      <div id={`${domIdPrefix}-${node.id}`} className="relative">
+        <div
+          className={`flex items-start gap-3 py-2 px-1 rounded-[10px] transition-colors ${
+            isHighlighted ? 'bg-accent/8 ring-2 ring-accent' : ''
+          }`}
+        >
+          <Avatar initials={node.isDeleted ? 'DEL' : node.initials} size="sm" />
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center flex-wrap gap-2">
+              <span className="text-xs font-bold text-ink truncate">
+                {node.isDeleted ? '[deleted]' : `@${node.username}`}
+              </span>
+              <span className="text-[11px] text-ink/50">{node.timestamp}</span>
+              {node.replyToUsername && node.parentCommentId && (
+                <button
+                  type="button"
+                  onClick={() => onJumpToComment(node.parentCommentId!)}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  title={`Jump to @${node.replyToUsername}'s comment`}
+                >
+                  <CornerDownRight size={11} aria-hidden="true" />
+                  <span>replying to @{node.replyToUsername}</span>
+                </button>
+              )}
+            </div>
+
+            <p
+              className={`mt-1 text-xs leading-relaxed break-words ${
+                node.isDeleted ? 'italic text-ink/60' : 'text-ink'
+              }`}
+            >
+              {node.isDeleted ? '[deleted]' : node.content}
+            </p>
+
+            {!node.isDeleted && (
+              <div className="mt-1 flex items-center gap-3 text-[11px] font-semibold text-ink/60">
+                {likesCount > 0 && (
+                  <span className="tabular-nums">
+                    {likesCount} {likesCount === 1 ? 'like' : 'likes'}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={openInlineReply}
+                  className="hover:text-ink cursor-pointer py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  Reply
+                </button>
+                <ContentActionMenu
+                  kind="reel_comment"
+                  comment={node}
+                  isOwn={isOwn}
+                  canModerate={canDelete}
+                  onDeleteComment={async () => {
+                    await onDeleteComment(threadId, node.id);
+                  }}
+                  onReportedComment={onReportedComment}
+                  onOpenChange={onActionMenuOpenChange}
+                  align="left"
+                  placement="bottom"
+                  iconSize={15}
+                  buttonClassName="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-full text-ink/50 hover:text-ink hover:bg-ink/8"
+                  testId={`reel-comment-menu-${node.id}`}
+                />
+              </div>
+            )}
+
+            {isReplying && (
+              <form
+                onSubmit={handleSubmit}
+                className="mt-2 pt-2 border-t border-ink/12 space-y-2"
+              >
+                <textarea
+                  ref={replyInputRef}
+                  rows={2}
+                  maxLength={maxLength}
+                  value={replyDraft}
+                  onChange={(e) => setReplyDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleSubmit();
+                    }
+                  }}
+                  placeholder={`Reply to @${node.username}...`}
+                  aria-label={`Inline reply to @${node.username}`}
+                  className="w-full px-3 py-2 rounded-[8px] text-xs bg-ink/4 border border-ink/12 text-ink placeholder:text-ink/50 focus:outline-none focus:ring-2 focus:ring-accent resize-none"
+                />
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setIsReplying(false);
+                      setReplyDraft('');
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    disabled={!replyDraft.trim() || submitting}
+                  >
+                    {submitting ? 'Posting...' : 'Reply'}
+                  </Button>
+                </div>
+              </form>
+            )}
+          </div>
+
+          {!node.isDeleted && onToggleLike && (
+            <button
+              type="button"
+              data-testid={`reel-comment-like-${node.id}`}
+              onClick={() => void onToggleLike(threadId, node.id)}
+              aria-pressed={Boolean(node.likedByMe)}
+              aria-label={node.likedByMe ? 'Unlike comment' : 'Like comment'}
+              className="shrink-0 min-h-[36px] min-w-[36px] flex items-start justify-center pt-1 cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <Heart
+                size={15}
+                className={
+                  node.likedByMe
+                    ? 'text-coral fill-coral'
+                    : 'text-ink/45 hover:text-ink'
+                }
+              />
+            </button>
+          )}
+        </div>
+
+        {/* Collapsed Toggle when branch is collapsed or untouched */}
+        {((children.length === 0 && node.hasMoreReplies) || (children.length > 0 && isCollapsed)) && (
+          <button
+            type="button"
+            onClick={() => {
+              setIsCollapsed(false);
+              if (children.length === 0) {
+                void handleLoadMore(null);
+              }
+            }}
+            disabled={loadingBranch}
+            className="ml-8 mt-1 inline-flex items-center gap-2 text-xs font-semibold text-ink/60 hover:text-ink cursor-pointer py-1 disabled:opacity-60 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <span aria-hidden="true" className="w-6 h-[1px] bg-ink/20" />
+            <span>
+              {loadingBranch
+                ? 'Loading replies...'
+                : `View all ${hiddenReplyCount} ${hiddenReplyCount === 1 ? 'reply' : 'replies'}`}
+            </span>
+          </button>
+        )}
+
+        {/* Expanded Nested Replies (oldest-first, 1 level at a time) */}
+        {!isCollapsed && children.length > 0 && (
+          <div
+            className={`mt-1 relative flex ${
+              canIndentFurther ? 'ml-3 pl-3 sm:ml-4 sm:pl-4' : 'ml-0 pl-2'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(true)}
+              aria-label="Collapse thread branch"
+              title="Click line to collapse branch"
+              className="group absolute left-0 top-0 bottom-0 w-3 flex justify-center cursor-pointer focus-visible:outline-none"
+            >
+              <span className="w-[2px] h-full bg-ink/12 group-hover:bg-accent transition-colors rounded-full" />
+            </button>
+
+            <div className="flex-1 min-w-0 space-y-1">
+              {children.map((child) => (
+                <ThreadCommentNode
+                  key={child.id}
+                  threadId={threadId}
+                  node={child}
+                  depth={depth + 1}
+                  currentUsername={currentUsername}
+                  highlightedId={highlightedId}
+                  onJumpToComment={onJumpToComment}
+                  onReplySubmit={onReplySubmit}
+                  onDeleteComment={onDeleteComment}
+                  onLoadMoreReplies={onLoadMoreReplies}
+                  onToggleLike={onToggleLike}
+                  onReportComment={onReportComment}
+                  onReportedComment={onReportedComment}
+                  onActionMenuOpenChange={onActionMenuOpenChange}
+                  canDeleteComment={canDeleteComment}
+                  variant="reel"
+                  domIdPrefix={domIdPrefix}
+                  maxLength={maxLength}
+                />
+              ))}
+
+              <div className="flex flex-wrap items-center gap-4 pt-1">
+                {node.hasMoreReplies && (
+                  <button
+                    type="button"
+                    onClick={() => void handleLoadMore(node.nextRepliesCursor)}
+                    disabled={loadingBranch}
+                    className="inline-flex items-center gap-2 text-xs font-semibold text-accent hover:underline cursor-pointer py-1 disabled:opacity-60 rounded"
+                  >
+                    <span aria-hidden="true" className="w-6 h-[1px] bg-ink/20" />
+                    <span>
+                      {loadingBranch
+                        ? 'Loading replies...'
+                        : `View more replies${node.hiddenReplyCount ? ` (${node.hiddenReplyCount})` : ''}`}
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed(true)}
+                  className="inline-flex items-center gap-2 text-xs font-semibold text-ink/50 hover:text-ink cursor-pointer py-1 rounded"
+                >
+                  <span aria-hidden="true" className="w-4 h-[1px] bg-ink/15" />
+                  <span>Hide replies</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div id={`${domIdPrefix}-${node.id}`} className="relative">
@@ -335,7 +588,7 @@ export default function ThreadCommentNode({
             {node.hasMoreReplies && (
               <button
                 type="button"
-                onClick={handleLoadMore}
+                onClick={() => void handleLoadMore(null)}
                 disabled={loadingBranch}
                 className="text-xs font-bold text-accent hover:underline py-1 px-2 rounded cursor-pointer disabled:opacity-60"
               >

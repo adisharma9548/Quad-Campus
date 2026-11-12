@@ -825,4 +825,278 @@ describe('Part 5: Reels Video Sanitizer & Upload Flow', () => {
     assert.equal(ownerDelLeaf.json().softDeleted, false);
     assert.equal(ownerDelLeaf.json().commentsCount, 2);
   });
+
+  test('Part C+D: supports comment likes (no notifications), Top/Newest cursor sort, pending-report penalty, hide, self-action guards, and followStatus', async () => {
+    const mp4 = generateRealVideoBuffer(tmpDir, 4, false);
+    const form = buildMultipartBody(
+      [
+        { name: 'caption', value: 'Ranking and actions reel' },
+        { name: 'durationSec', value: '4' },
+        { name: 'trimStart', value: '0' },
+        { name: 'trimEnd', value: '4' },
+        { name: 'audience', value: 'campus' },
+        { name: 'commentsEnabled', value: 'true' },
+      ],
+      [{ name: 'video', filename: 'sort-d.mp4', contentType: 'video/mp4', data: mp4 }]
+    );
+    const uploadRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/reels',
+      headers: { Authorization: `Bearer ${tokenAuthor}`, 'content-type': form.contentType },
+      payload: form.payload,
+    });
+    assert.equal(uploadRes.statusCode, 201);
+    const reelId = (uploadRes.json() as { id: string }).id;
+    for (let i = 0; i < 60; i += 1) {
+      const poll = await app.inject({
+        method: 'GET',
+        url: `/api/v1/reels/${reelId}`,
+        headers: { Authorization: `Bearer ${tokenAuthor}` },
+      });
+      if ((poll.json() as { status: string }).status === 'active') break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // Create 3 comments sequentially so createdAtMs differs strictly
+    const c1Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/comments`,
+      headers: { Authorization: `Bearer ${tokenAuthor}`, 'content-type': 'application/json' },
+      payload: { content: 'First top-candidate comment' },
+    });
+    assert.equal(c1Res.statusCode, 201);
+    const c1 = c1Res.json() as { id: string };
+    await new Promise((r) => setTimeout(r, 15));
+
+    const c2Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/comments`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: { content: 'Reported high-like comment' },
+    });
+    assert.equal(c2Res.statusCode, 201);
+    const c2 = c2Res.json() as { id: string };
+    await new Promise((r) => setTimeout(r, 15));
+
+    const c3Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/comments`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+      payload: { content: 'Newest unreported low-score comment' },
+    });
+    assert.equal(c3Res.statusCode, 201);
+    const c3 = c3Res.json() as { id: string };
+
+    // Add 3 child replies under c1 (oldest first when expanded)
+    for (const label of ['Branch reply A', 'Branch reply B', 'Branch reply C']) {
+      await new Promise((r) => setTimeout(r, 10));
+      const rep = await app.inject({
+        method: 'POST',
+        url: `/api/v1/reels/${reelId}/comments`,
+        headers: { Authorization: `Bearer ${tokenOther}` },
+        payload: { content: label, parentCommentId: c1.id },
+      });
+      assert.equal(rep.statusCode, 201);
+    }
+
+    // Check notifications baseline before liking c1
+    const notifBefore = (
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/v1/social/overview',
+          headers: { Authorization: `Bearer ${tokenAuthor}` },
+        })
+      ).json() as { notifications?: unknown[] }
+    ).notifications?.length || 0;
+
+    // Toggle like on c1 (2 likes from different users) & c2 (1 like, then reported)
+    const l1 = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/comments/${c1.id}/like`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    assert.equal(l1.statusCode, 200);
+    assert.equal(l1.json().liked, true);
+    assert.equal(l1.json().likes, 1);
+
+    const l1Author = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/comments/${c1.id}/like`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(l1Author.json().likes, 2);
+
+    // Toggle off & back on by tokenOther -> stays 1 per user
+    const l1Off = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/comments/${c1.id}/like`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    assert.equal(l1Off.json().liked, false);
+    assert.equal(l1Off.json().likes, 1);
+
+    // No notification created by comment like
+    const notifAfter = (
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/v1/social/overview',
+          headers: { Authorization: `Bearer ${tokenAuthor}` },
+        })
+      ).json() as { notifications?: unknown[] }
+    ).notifications?.length || 0;
+    assert.equal(notifAfter, notifBefore);
+
+    // Report c2 -> sinks below unreported c3 even with like
+    await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/comments/${c2.id}/like`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    const repC2 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/reports',
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+      payload: { targetType: 'reel_comment', targetId: c2.id, reason: 'Spam or misleading' },
+    });
+    assert.equal(repC2.statusCode, 201);
+
+    // Top sort + maxDepth=0 collapses branches + sinks c2
+    const topPage1 = await app.inject({
+      method: 'GET',
+      url: `/api/v1/reels/${reelId}/comments?sort=top&limit=2&maxDepth=0`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(topPage1.statusCode, 200);
+    const p1 = topPage1.json() as {
+      items: Array<{ id: string; likes: number; likedByMe: boolean; replies: unknown[]; hasMoreReplies: boolean; hiddenReplyCount: number }>;
+      hasMore: boolean;
+      nextCursor: string | null;
+    };
+    assert.deepEqual(
+      p1.items.map((x) => x.id),
+      [c1.id, c3.id]
+    );
+    assert.equal(p1.items[0].likedByMe, true);
+    assert.equal(p1.items[0].likes, 1);
+    assert.equal(p1.items[0].replies.length, 0);
+    assert.equal(p1.items[0].hasMoreReplies, true);
+    assert.equal(p1.items[0].hiddenReplyCount, 3);
+    assert.equal(p1.hasMore, true);
+    assert.ok(p1.nextCursor);
+
+    const topPage2 = await app.inject({
+      method: 'GET',
+      url: `/api/v1/reels/${reelId}/comments?sort=top&limit=2&maxDepth=0&cursor=${encodeURIComponent(p1.nextCursor!)}`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    const p2 = topPage2.json() as { items: Array<{ id: string }>; hasMore: boolean };
+    assert.deepEqual(
+      p2.items.map((x) => x.id),
+      [c2.id]
+    );
+    assert.equal(p2.hasMore, false);
+
+    // Newest sort orders unreported newest first [c3, c1], with pending-reported c2 last
+    const newestRes = await app.inject({
+      method: 'GET',
+      url: `/api/v1/reels/${reelId}/comments?sort=newest&limit=10&maxDepth=0`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    const newestIds = (newestRes.json() as { items: Array<{ id: string }> }).items.map((x) => x.id);
+    assert.deepEqual(newestIds, [c3.id, c1.id, c2.id]);
+
+    // Branch expansion + cursor pagination returns replies oldest-first
+    const branchPage1 = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/reels/${reelId}/comments?parentId=${c1.id}&limit=2&maxDepth=1`,
+        headers: { Authorization: `Bearer ${tokenAuthor}` },
+      })
+    ).json() as { items: Array<{ content: string }>; hasMore: boolean; nextCursor: string | null };
+    assert.deepEqual(
+      branchPage1.items.map((x) => x.content),
+      ['Branch reply A', 'Branch reply B']
+    );
+    assert.equal(branchPage1.hasMore, true);
+
+    const branchPage2 = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/v1/reels/${reelId}/comments?parentId=${c1.id}&limit=2&maxDepth=1&cursor=${encodeURIComponent(branchPage1.nextCursor!)}`,
+        headers: { Authorization: `Bearer ${tokenAuthor}` },
+      })
+    ).json() as { items: Array<{ content: string }>; hasMore: boolean };
+    assert.deepEqual(
+      branchPage2.items.map((x) => x.content),
+      ['Branch reply C']
+    );
+    assert.equal(branchPage2.hasMore, false);
+
+    // Self-action guards & hide/unhide reel
+    const selfHide = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/hide`,
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    assert.equal(selfHide.statusCode, 400);
+
+    const authorSession = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/session',
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+    });
+    const authorUsername = (authorSession.json() as { user: { username: string } }).user.username;
+
+    const selfMute = await app.inject({
+      method: 'POST',
+      url: '/api/v1/mutes',
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+      payload: { username: authorUsername },
+    });
+    assert.equal(selfMute.statusCode, 400);
+
+    const selfBlock = await app.inject({
+      method: 'POST',
+      url: '/api/v1/blocks',
+      headers: { Authorization: `Bearer ${tokenAuthor}` },
+      payload: { username: authorUsername },
+    });
+    assert.equal(selfBlock.statusCode, 400);
+
+    const otherHide = await app.inject({
+      method: 'POST',
+      url: `/api/v1/reels/${reelId}/hide`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    assert.equal(otherHide.statusCode, 200);
+
+    const feedHidden = (
+      await app.inject({
+        method: 'GET',
+        url: '/api/v1/reels',
+        headers: { Authorization: `Bearer ${tokenOther}` },
+      })
+    ).json() as { items: Array<{ id: string }> };
+    assert.equal(feedHidden.items.some((r) => r.id === reelId), false);
+
+    const otherUnhide = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/reels/${reelId}/hide`,
+      headers: { Authorization: `Bearer ${tokenOther}` },
+    });
+    assert.equal(otherUnhide.statusCode, 200);
+
+    const feedRestored = (
+      await app.inject({
+        method: 'GET',
+        url: '/api/v1/reels',
+        headers: { Authorization: `Bearer ${tokenOther}` },
+      })
+    ).json() as { items: Array<{ id: string; followStatus?: string }> };
+    const matched = feedRestored.items.find((r) => r.id === reelId);
+    assert.ok(matched);
+    assert.equal(matched!.followStatus, 'following');
+  });
 });

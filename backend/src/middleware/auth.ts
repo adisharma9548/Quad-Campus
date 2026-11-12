@@ -94,6 +94,7 @@ export function getViewerRelations(db: DatabaseSync, viewerId: string | null): V
   const blockedByIds = new Set<string>();
   const mutedIds = new Set<string>();
   const dismissedPostIds = new Set<string>();
+  const dismissedReelIds = new Set<string>();
   const dismissedTopics = new Set<string>();
 
   if (!viewerId) {
@@ -106,6 +107,7 @@ export function getViewerRelations(db: DatabaseSync, viewerId: string | null): V
       blockedByIds,
       mutedIds,
       dismissedPostIds,
+      dismissedReelIds,
       dismissedTopics: [],
     };
   }
@@ -160,6 +162,12 @@ export function getViewerRelations(db: DatabaseSync, viewerId: string | null): V
     }
   }
 
+  for (const r of db
+    .prepare('SELECT reel_id FROM dismissed_reels WHERE user_id = ?')
+    .all(viewerId) as Array<{ reel_id: string }>) {
+    dismissedReelIds.add(r.reel_id);
+  }
+
   return {
     followingIds,
     outgoingRequestTargetIds,
@@ -169,6 +177,7 @@ export function getViewerRelations(db: DatabaseSync, viewerId: string | null): V
     blockedByIds,
     mutedIds,
     dismissedPostIds,
+    dismissedReelIds,
     dismissedTopics: Array.from(dismissedTopics),
   };
 }

@@ -1,22 +1,23 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { X, MessageCircle, Send } from 'lucide-react';
+import { X, MessageCircle } from 'lucide-react';
 import type { ReelCommentItem, ReelItem, ThreadReply } from '../types/quad';
 import { IS_REAL_BACKEND, apiRequest } from '../services/apiClient';
 import { useApp } from '../context/AppContext';
 import { useToast } from '../context/ToastContext';
 import ThreadCommentNode from './ThreadCommentNode';
-import ReportModal from './ReportModal';
-import { Button } from './ui';
+import { Avatar, Button } from './ui';
 import {
   insertReplyIntoTree,
   replaceTempReplyInTree,
   removeReplyFromTree,
   mergeBranchChildren,
   setReplyReportedInTree,
+  setReplyLikeInTree,
 } from '../utils/threadTree';
 
 const MAX_REEL_COMMENT_CHARS = 500;
 const PAGE_LIMIT = 20;
+type CommentSortMode = 'top' | 'newest';
 
 interface CommentsApiResponse {
   items: ReelCommentItem[];
@@ -24,7 +25,10 @@ interface CommentsApiResponse {
   totalCount: number;
   hasMore: boolean;
   nextOffset: number;
+  nextCursor?: string | null;
+  remainingCount?: number;
   commentsEnabled: boolean;
+  sort?: CommentSortMode;
 }
 
 interface CommentThreadState {
@@ -32,6 +36,7 @@ interface CommentThreadState {
   totalCount: number;
   hasMore: boolean;
   nextOffset: number;
+  nextCursor: string | null;
   commentsEnabled: boolean;
 }
 
@@ -49,23 +54,29 @@ export default function ReelCommentsPanel({
   onClose,
   mode = 'split',
 }: ReelCommentsPanelProps) {
-  const { state, submitReport, updateReelCommentCount } = useApp();
+  const { state, updateReelCommentCount } = useApp();
   const { showToast } = useToast();
 
-  const [cacheByReel, setCacheByReel] = useState<Record<string, CommentThreadState>>({});
+  const [sortBy, setSortBy] = useState<CommentSortMode>('top');
+  const [cacheByKey, setCacheByKey] = useState<Record<string, CommentThreadState>>({});
   const [draftsByReel, setDraftsByReel] = useState<Record<string, string>>({});
-  const [loadingReelId, setLoadingReelId] = useState<string | null>(null);
-  const [errorByReel, setErrorByReel] = useState<Record<string, string>>({});
+  const [loadingCacheKey, setLoadingCacheKey] = useState<string | null>(null);
+  const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
   const [loadingMore, setLoadingMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  const [reportTarget, setReportTarget] = useState<ThreadReply | null>(null);
+  const [childMenuOpen, setChildMenuOpen] = useState(false);
+  const [mobileViewportMetrics, setMobileViewportMetrics] = useState<{
+    maxSheetPx?: number;
+    keyboardInsetPx: number;
+  }>({ keyboardInsetPx: 0 });
   const highlightTimerRef = useRef<number | null>(null);
 
   const reelKey = reel ? String(reel.id) : '';
+  const cacheKey = reelKey ? `${reelKey}:${sortBy}` : '';
   const reelDefaultCommentsEnabled = reel?.commentsEnabled !== false;
   const reelDefaultCount = Math.max(0, Number(reel?.comments ?? 0));
-  const cachedEntry = reelKey ? cacheByReel[reelKey] : undefined;
+  const cachedEntry = cacheKey ? cacheByKey[cacheKey] : undefined;
   const currentEntry: CommentThreadState = useMemo(
     () =>
       cachedEntry || {
@@ -73,33 +84,58 @@ export default function ReelCommentsPanel({
         totalCount: reelDefaultCount,
         hasMore: false,
         nextOffset: 0,
+        nextCursor: null,
         commentsEnabled: reelDefaultCommentsEnabled,
       },
     [cachedEntry, reelDefaultCommentsEnabled, reelDefaultCount]
   );
   const draft = draftsByReel[reelKey] || '';
-  const isLoadingInitial = Boolean(reelKey && loadingReelId === reelKey && !cacheByReel[reelKey]);
-  const loadError = reelKey ? errorByReel[reelKey] || '' : '';
+  const isLoadingInitial = Boolean(cacheKey && loadingCacheKey === cacheKey && !cacheByKey[cacheKey]);
+  const loadError = cacheKey ? errorByKey[cacheKey] || '' : '';
   const isReelOwner = Boolean(
     reel && state.username && reel.username.toLowerCase() === state.username.toLowerCase()
   );
 
+  // Track mobile visualViewport height so bottom sheet fits cleanly above soft keyboard
+  useEffect(() => {
+    if (!isOpen || mode !== 'split' || typeof window === 'undefined' || !window.visualViewport) {
+      return undefined;
+    }
+    const vv = window.visualViewport;
+    const syncViewport = () => {
+      const keyboardInset = Math.max(0, Math.round(window.innerHeight - (vv.height + vv.offsetTop)));
+      setMobileViewportMetrics({
+        maxSheetPx: Math.max(240, Math.round(vv.height * 0.6)),
+        keyboardInsetPx: keyboardInset,
+      });
+    };
+    syncViewport();
+    vv.addEventListener('resize', syncViewport);
+    vv.addEventListener('scroll', syncViewport);
+    return () => {
+      vv.removeEventListener('resize', syncViewport);
+      vv.removeEventListener('scroll', syncViewport);
+    };
+  }, [isOpen, mode]);
+
   const fetchCommentsPage = useCallback(
     async (
       targetReelId: string | number,
+      targetSort: CommentSortMode,
       fallbackCommentsEnabled: boolean,
-      offset = 0,
+      cursor: string | null = null,
       append = false
     ) => {
-      const key = String(targetReelId);
+      const key = `${String(targetReelId)}:${targetSort}`;
       if (!IS_REAL_BACKEND) {
-        setCacheByReel((prev) => ({
+        setCacheByKey((prev) => ({
           ...prev,
           [key]: prev[key] || {
             items: [],
             totalCount: 0,
             hasMore: false,
             nextOffset: 0,
+            nextCursor: null,
             commentsEnabled: fallbackCommentsEnabled,
           },
         }));
@@ -107,8 +143,8 @@ export default function ReelCommentsPanel({
       }
 
       if (!append) {
-        setLoadingReelId(key);
-        setErrorByReel((prev) => {
+        setLoadingCacheKey(key);
+        setErrorByKey((prev) => {
           if (!prev[key]) return prev;
           const next = { ...prev };
           delete next[key];
@@ -117,10 +153,11 @@ export default function ReelCommentsPanel({
       }
 
       try {
+        const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
         const res = await apiRequest<CommentsApiResponse>(
-          `/reels/${encodeURIComponent(key)}/comments?limit=${PAGE_LIMIT}&offset=${offset}&maxDepth=2`
+          `/reels/${encodeURIComponent(String(targetReelId))}/comments?sort=${targetSort}&limit=${PAGE_LIMIT}&maxDepth=0${cursorParam}`
         );
-        setCacheByReel((prev) => {
+        setCacheByKey((prev) => {
           const prevItems = append && prev[key] ? prev[key].items : [];
           const existingIds = new Set(prevItems.map((c) => String(c.id)));
           const mergedItems = append
@@ -133,6 +170,7 @@ export default function ReelCommentsPanel({
               totalCount: res.totalCount ?? mergedItems.length,
               hasMore: Boolean(res.hasMore),
               nextOffset: res.nextOffset ?? mergedItems.length,
+              nextCursor: res.nextCursor ?? null,
               commentsEnabled: res.commentsEnabled !== false,
             },
           };
@@ -142,7 +180,7 @@ export default function ReelCommentsPanel({
         }
       } catch (err) {
         if (!append) {
-          setErrorByReel((prev) => ({
+          setErrorByKey((prev) => ({
             ...prev,
             [key]: err instanceof Error ? err.message : 'Unable to load comments.',
           }));
@@ -151,27 +189,28 @@ export default function ReelCommentsPanel({
         }
       } finally {
         if (!append) {
-          setLoadingReelId((curr) => (curr === key ? null : curr));
+          setLoadingCacheKey((curr) => (curr === key ? null : curr));
         }
       }
     },
     [showToast, updateReelCommentCount]
   );
 
-  // Lazy-load comments only when opened or when switching active reels while open
+  // Lazy-load comments when opened, switching reels, or switching Top/Newest
   useEffect(() => {
     if (!isOpen || !reelKey) return;
     const timer = window.setTimeout(() => {
-      void fetchCommentsPage(reelKey, reelDefaultCommentsEnabled, 0, false);
+      void fetchCommentsPage(reelKey, sortBy, reelDefaultCommentsEnabled, null, false);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [fetchCommentsPage, isOpen, reelDefaultCommentsEnabled, reelKey]);
+  }, [fetchCommentsPage, isOpen, reelDefaultCommentsEnabled, reelKey, sortBy]);
 
-  // Escape closes comments panel when ReportModal is not open
+  // Escape closes comments panel only when inner comment menu/modal isn't open
   useEffect(() => {
-    if (!isOpen || reportTarget) return undefined;
+    if (!isOpen || childMenuOpen) return undefined;
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (document.querySelector('[role="menu"], [role="dialog"]')) return;
         e.preventDefault();
         e.stopPropagation();
         onClose();
@@ -179,7 +218,7 @@ export default function ReelCommentsPanel({
     };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [isOpen, onClose, reportTarget]);
+  }, [childMenuOpen, isOpen, onClose]);
 
   useEffect(() => {
     return () => {
@@ -216,7 +255,7 @@ export default function ReelCommentsPanel({
         return;
       }
 
-      const key = String(targetReelId);
+      const activeKey = `${String(targetReelId)}:${sortBy}`;
       const tempId = `temp_rc_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`;
       const optimisticNode: ReelCommentItem = {
         id: tempId,
@@ -230,19 +269,20 @@ export default function ReelCommentsPanel({
         body: content,
         timestamp: 'Just now',
         likes: 0,
+        likedByMe: false,
         isDeleted: false,
         replies: [],
       };
 
-      const prevSnapshot = cacheByReel[key];
-      setCacheByReel((prev) => {
-        const cur = prev[key] || currentEntry;
+      const prevSnapshot = cacheByKey[activeKey];
+      setCacheByKey((prev) => {
+        const cur = prev[activeKey] || currentEntry;
         const nextItems = parentCommentId
           ? (insertReplyIntoTree(cur.items, parentCommentId, optimisticNode) as ReelCommentItem[])
-          : [...cur.items, optimisticNode];
+          : [optimisticNode, ...cur.items];
         return {
           ...prev,
-          [key]: {
+          [activeKey]: {
             ...cur,
             items: nextItems,
             totalCount: cur.totalCount + 1,
@@ -258,7 +298,7 @@ export default function ReelCommentsPanel({
 
       try {
         const created = await apiRequest<ReelCommentItem & { commentsCount?: number }>(
-          `/reels/${encodeURIComponent(key)}/comments`,
+          `/reels/${encodeURIComponent(String(targetReelId))}/comments`,
           {
             method: 'POST',
             body: {
@@ -271,11 +311,11 @@ export default function ReelCommentsPanel({
           typeof created.commentsCount === 'number'
             ? created.commentsCount
             : currentEntry.totalCount + 1;
-        setCacheByReel((prev) => {
-          const cur = prev[key] || currentEntry;
+        setCacheByKey((prev) => {
+          const cur = prev[activeKey] || currentEntry;
           return {
             ...prev,
-            [key]: {
+            [activeKey]: {
               ...cur,
               items: replaceTempReplyInTree(cur.items, tempId, created) as ReelCommentItem[],
               totalCount: serverCount,
@@ -285,15 +325,15 @@ export default function ReelCommentsPanel({
         updateReelCommentCount(targetReelId, serverCount);
       } catch (err) {
         // Rollback optimistic insertion cleanly
-        setCacheByReel((prev) => {
+        setCacheByKey((prev) => {
           if (prevSnapshot) {
-            return { ...prev, [key]: prevSnapshot };
+            return { ...prev, [activeKey]: prevSnapshot };
           }
-          const cur = prev[key];
+          const cur = prev[activeKey];
           if (!cur) return prev;
           return {
             ...prev,
-            [key]: {
+            [activeKey]: {
               ...cur,
               items: removeReplyFromTree(cur.items, tempId).nodes as ReelCommentItem[],
               totalCount: Math.max(0, cur.totalCount - 1),
@@ -310,9 +350,10 @@ export default function ReelCommentsPanel({
       }
     },
     [
-      cacheByReel,
+      cacheByKey,
       currentEntry,
       showToast,
+      sortBy,
       state.userInitials,
       state.username,
       updateReelCommentCount,
@@ -349,15 +390,15 @@ export default function ReelCommentsPanel({
 
   const handleDeleteComment = useCallback(
     async (targetReelId: string | number, commentId: string | number) => {
-      const key = String(targetReelId);
-      const prevSnapshot = cacheByReel[key];
+      const activeKey = `${String(targetReelId)}:${sortBy}`;
+      const prevSnapshot = cacheByKey[activeKey];
       if (!IS_REAL_BACKEND) {
-        setCacheByReel((prev) => {
-          const cur = prev[key];
+        setCacheByKey((prev) => {
+          const cur = prev[activeKey];
           if (!cur) return prev;
           return {
             ...prev,
-            [key]: {
+            [activeKey]: {
               ...cur,
               items: removeReplyFromTree(cur.items, commentId).nodes as ReelCommentItem[],
               totalCount: Math.max(0, cur.totalCount - 1),
@@ -374,7 +415,7 @@ export default function ReelCommentsPanel({
           softDeleted: boolean;
           commentsCount: number;
         }>(
-          `/reels/${encodeURIComponent(key)}/comments/${encodeURIComponent(String(commentId))}`,
+          `/reels/${encodeURIComponent(String(targetReelId))}/comments/${encodeURIComponent(String(commentId))}`,
           { method: 'DELETE' }
         );
         const markSoftDeleted = (nodes: ReelCommentItem[]): ReelCommentItem[] =>
@@ -386,15 +427,15 @@ export default function ReelCommentsPanel({
             replies: n.replies ? markSoftDeleted(n.replies as ReelCommentItem[]) : [],
           }));
 
-        setCacheByReel((prev) => {
-          const cur = prev[key];
+        setCacheByKey((prev) => {
+          const cur = prev[activeKey];
           if (!cur) return prev;
           const nextItems = res.softDeleted
             ? markSoftDeleted(cur.items)
             : (removeReplyFromTree(cur.items, commentId).nodes as ReelCommentItem[]);
           return {
             ...prev,
-            [key]: {
+            [activeKey]: {
               ...cur,
               items: nextItems,
               totalCount: res.commentsCount,
@@ -405,36 +446,42 @@ export default function ReelCommentsPanel({
         showToast('Comment removed', 'info');
       } catch (err) {
         if (prevSnapshot) {
-          setCacheByReel((prev) => ({ ...prev, [key]: prevSnapshot }));
+          setCacheByKey((prev) => ({ ...prev, [activeKey]: prevSnapshot }));
         }
         showToast(err instanceof Error ? err.message : 'Unable to delete comment', 'error');
       }
     },
-    [cacheByReel, showToast, updateReelCommentCount]
+    [cacheByKey, showToast, sortBy, updateReelCommentCount]
   );
 
   const handleLoadMoreReplies = useCallback(
-    async (targetReelId: string | number, parentCommentId: string | number) => {
+    async (
+      targetReelId: string | number,
+      parentCommentId: string | number,
+      cursor?: string | null
+    ) => {
       if (!IS_REAL_BACKEND) return;
-      const key = String(targetReelId);
+      const activeKey = `${String(targetReelId)}:${sortBy}`;
       try {
+        const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
         const res = await apiRequest<CommentsApiResponse>(
-          `/reels/${encodeURIComponent(key)}/comments?parentId=${encodeURIComponent(
+          `/reels/${encodeURIComponent(String(targetReelId))}/comments?parentId=${encodeURIComponent(
             String(parentCommentId)
-          )}&maxDepth=2`
+          )}&limit=5&maxDepth=1${cursorParam}`
         );
-        setCacheByReel((prev) => {
-          const cur = prev[key];
+        setCacheByKey((prev) => {
+          const cur = prev[activeKey];
           if (!cur) return prev;
           return {
             ...prev,
-            [key]: {
+            [activeKey]: {
               ...cur,
-              items: mergeBranchChildren(
-                cur.items,
-                parentCommentId,
-                res.items || []
-              ) as ReelCommentItem[],
+              items: mergeBranchChildren(cur.items, parentCommentId, res.items || [], {
+                append: Boolean(cursor),
+                hasMore: Boolean(res.hasMore),
+                remainingCount: res.remainingCount,
+                nextCursor: res.nextCursor,
+              }) as ReelCommentItem[],
             },
           };
         });
@@ -442,66 +489,111 @@ export default function ReelCommentsPanel({
         showToast(err instanceof Error ? err.message : 'Could not load more replies', 'error');
       }
     },
-    [showToast]
+    [showToast, sortBy]
   );
 
-  const handleOpenReportComment = useCallback(
-    (_targetReelId: string | number, comment: ThreadReply) => {
-      if (comment.reportedByMe) {
-        showToast('You already reported this', 'info');
-        return;
-      }
-      setReportTarget(comment);
-    },
-    [showToast]
-  );
-
-  const handleConfirmReport = async (reason: string, details: string) => {
-    if (!reportTarget || !reel) return;
-    const reportedId = reportTarget.id;
-    const key = String(reel.id);
-
-    setCacheByReel((prev) => {
-      const cur = prev[key];
-      if (!cur) return prev;
-      return {
-        ...prev,
-        [key]: {
-          ...cur,
-          items: setReplyReportedInTree(cur.items, reportedId, true) as ReelCommentItem[],
-        },
+  const handleToggleCommentLike = useCallback(
+    async (targetReelId: string | number, commentId: string | number) => {
+      const activeKey = `${String(targetReelId)}:${sortBy}`;
+      const snapshot = cacheByKey[activeKey];
+      const findNode = (nodes: ThreadReply[]): ThreadReply | undefined => {
+        for (const n of nodes) {
+          if (String(n.id) === String(commentId)) return n;
+          if (n.replies) {
+            const found = findNode(n.replies);
+            if (found) return found;
+          }
+        }
+        return undefined;
       };
-    });
+      const existing = snapshot ? findNode(snapshot.items) : undefined;
+      const prevLiked = Boolean(existing?.likedByMe);
+      const prevLikes = Math.max(0, Number(existing?.likes ?? 0));
+      const optimisticLiked = !prevLiked;
+      const optimisticLikes = Math.max(0, prevLikes + (optimisticLiked ? 1 : -1));
 
-    try {
-      const outcome = await submitReport({
-        targetType: 'reel_comment',
-        targetId: String(reportedId),
-        reason,
-        details,
-        contentSnippet: String(reportTarget.content || '').slice(0, 200),
-      });
-      setReportTarget(null);
-      if (outcome.duplicate) {
-        showToast('You already reported this', 'info');
-      } else {
-        showToast('Confidential report submitted to campus moderation', 'info');
-      }
-    } catch (err) {
-      setCacheByReel((prev) => {
-        const cur = prev[key];
+      setCacheByKey((prev) => {
+        const cur = prev[activeKey];
         if (!cur) return prev;
         return {
           ...prev,
-          [key]: {
+          [activeKey]: {
             ...cur,
-            items: setReplyReportedInTree(cur.items, reportedId, false) as ReelCommentItem[],
+            items: setReplyLikeInTree(
+              cur.items,
+              commentId,
+              optimisticLiked,
+              optimisticLikes
+            ) as ReelCommentItem[],
           },
         };
       });
-      showToast(err instanceof Error ? err.message : 'Failed to submit report', 'error');
-    }
-  };
+
+      if (!IS_REAL_BACKEND) return;
+
+      try {
+        const res = await apiRequest<{ liked: boolean; likes: number }>(
+          `/reels/${encodeURIComponent(String(targetReelId))}/comments/${encodeURIComponent(
+            String(commentId)
+          )}/like`,
+          { method: 'POST' }
+        );
+        setCacheByKey((prev) => {
+          const cur = prev[activeKey];
+          if (!cur) return prev;
+          return {
+            ...prev,
+            [activeKey]: {
+              ...cur,
+              items: setReplyLikeInTree(
+                cur.items,
+                commentId,
+                res.liked,
+                res.likes
+              ) as ReelCommentItem[],
+            },
+          };
+        });
+      } catch (err) {
+        setCacheByKey((prev) => {
+          const cur = prev[activeKey];
+          if (!cur) return prev;
+          return {
+            ...prev,
+            [activeKey]: {
+              ...cur,
+              items: setReplyLikeInTree(
+                cur.items,
+                commentId,
+                prevLiked,
+                prevLikes
+              ) as ReelCommentItem[],
+            },
+          };
+        });
+        showToast(err instanceof Error ? err.message : 'Could not update like', 'error');
+      }
+    },
+    [cacheByKey, showToast, sortBy]
+  );
+
+  const handleReportedComment = useCallback(
+    (commentId: string | number) => {
+      if (!cacheKey) return;
+      setCacheByKey((prev) => {
+        const cur = prev[cacheKey];
+        if (!cur) return prev;
+        return {
+          ...prev,
+          [cacheKey]: {
+            ...cur,
+            items: setReplyReportedInTree(cur.items, commentId, true) as ReelCommentItem[],
+          },
+        };
+      });
+    },
+    [cacheKey]
+  );
 
   if (!isOpen || !reel) return null;
 
@@ -512,30 +604,53 @@ export default function ReelCommentsPanel({
       onTouchMove={(e) => e.stopPropagation()}
       className="flex flex-col h-full w-full bg-canvas border border-ink/12 rounded-[16px] overflow-hidden shadow-lg"
     >
-      {/* Header */}
+      {/* Header: X left, centered Comments title, plain-text Top/Newest sort right */}
       <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-ink/12 shrink-0">
-        <div className="min-w-0">
-          <h3 className="font-display text-sm font-bold text-ink truncate">
-            Comments ({currentEntry.totalCount})
-          </h3>
-          <p className="text-xs text-ink/60 truncate">On @{reel.username}&apos;s reel</p>
-        </div>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close comments panel"
-          className="p-2 rounded-full text-ink/60 hover:text-ink hover:bg-ink/8 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="min-h-[44px] min-w-[44px] -ml-2 rounded-full text-ink/70 hover:text-ink hover:bg-ink/8 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <X size={18} />
         </button>
+
+        <h3 className="font-display text-sm font-bold text-ink truncate">
+          Comments{' '}
+          <span className="font-normal text-ink/50 tabular-nums">({currentEntry.totalCount})</span>
+        </h3>
+
+        <div className="flex items-center gap-2 shrink-0 text-xs">
+          <button
+            type="button"
+            aria-pressed={sortBy === 'top'}
+            onClick={() => setSortBy('top')}
+            className={`cursor-pointer py-1 transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+              sortBy === 'top' ? 'font-bold text-ink' : 'font-medium text-ink/50 hover:text-ink'
+            }`}
+          >
+            Top
+          </button>
+          <span className="text-ink/25" aria-hidden="true">/</span>
+          <button
+            type="button"
+            aria-pressed={sortBy === 'newest'}
+            onClick={() => setSortBy('newest')}
+            className={`cursor-pointer py-1 transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+              sortBy === 'newest' ? 'font-bold text-ink' : 'font-medium text-ink/50 hover:text-ink'
+            }`}
+          >
+            Newest
+          </button>
+        </div>
       </div>
 
-      {/* Scrollable Comment Tree */}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-3">
+      {/* Scrollable Comment Tree (zero visible scrollbars + overscroll-contain) */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain no-scrollbar p-4 space-y-1">
         {isLoadingInitial ? (
           <div className="space-y-3 py-2" aria-label="Loading comments">
             {[0, 1, 2].map((idx) => (
-              <div key={idx} className="rounded-[10px] border border-ink/10 p-3 space-y-2 animate-pulse">
+              <div key={idx} className="py-2 space-y-2 animate-pulse">
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 rounded-full bg-ink/10" />
                   <div className="h-3 w-24 rounded bg-ink/10" />
@@ -553,7 +668,7 @@ export default function ReelCommentsPanel({
               variant="secondary"
               size="sm"
               onClick={() => {
-                void fetchCommentsPage(reel.id, reelDefaultCommentsEnabled, 0, false);
+                void fetchCommentsPage(reel.id, sortBy, reelDefaultCommentsEnabled, null, false);
               }}
             >
               Try again
@@ -582,8 +697,11 @@ export default function ReelCommentsPanel({
                 onReplySubmit={handleReplySubmit}
                 onDeleteComment={handleDeleteComment}
                 onLoadMoreReplies={handleLoadMoreReplies}
-                onReportComment={handleOpenReportComment}
+                onToggleLike={handleToggleCommentLike}
+                onReportedComment={handleReportedComment}
+                onActionMenuOpenChange={setChildMenuOpen}
                 canDeleteComment={() => isReelOwner || state.role === 'admin'}
+                variant="reel"
                 domIdPrefix="reel-comment"
                 maxLength={MAX_REEL_COMMENT_CHARS}
               />
@@ -602,8 +720,9 @@ export default function ReelCommentsPanel({
                     try {
                       await fetchCommentsPage(
                         reel.id,
+                        sortBy,
                         reelDefaultCommentsEnabled,
-                        currentEntry.nextOffset,
+                        currentEntry.nextCursor,
                         true
                       );
                     } finally {
@@ -619,7 +738,7 @@ export default function ReelCommentsPanel({
         )}
       </div>
 
-      {/* Bottom Composer */}
+      {/* Fixed Bottom Composer (current user avatar + rounded input + plain-text Post when non-empty) */}
       {currentEntry.commentsEnabled === false ? (
         <div className="px-4 py-3 border-t border-ink/12 bg-ink/4 text-center text-xs font-semibold text-ink/60 shrink-0">
           Comments are turned off for this reel.
@@ -627,11 +746,12 @@ export default function ReelCommentsPanel({
       ) : (
         <form
           onSubmit={handlePostTopLevel}
-          className="p-3 border-t border-ink/12 bg-canvas shrink-0 space-y-2"
+          className="px-4 py-3 border-t border-ink/12 bg-canvas shrink-0 space-y-1"
         >
-          <div className="flex items-end gap-2">
+          <div className="flex items-center gap-2">
+            <Avatar initials={state.userInitials || 'QD'} size="sm" />
             <textarea
-              rows={2}
+              rows={1}
               maxLength={MAX_REEL_COMMENT_CHARS}
               placeholder="Add a comment..."
               aria-label="Add a comment on this reel"
@@ -646,17 +766,17 @@ export default function ReelCommentsPanel({
                   void handlePostTopLevel(e);
                 }
               }}
-              className="flex-1 min-h-[44px] max-h-24 px-3 py-2 text-xs rounded-[8px] border border-ink/12 bg-ink/4 text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent resize-none"
+              className="flex-1 min-h-[36px] max-h-24 px-3 py-2 text-xs rounded-full border border-ink/12 bg-ink/4 text-ink placeholder:text-ink/50 focus:outline-none focus:ring-2 focus:ring-accent resize-none"
             />
-            <Button
-              type="submit"
-              variant="primary"
-              size="md"
-              icon={Send}
-              disabled={!draft.trim() || submitting}
-            >
-              {submitting ? '...' : 'Post'}
-            </Button>
+            {draft.trim().length > 0 && (
+              <button
+                type="submit"
+                disabled={submitting}
+                className="text-xs font-bold text-accent hover:underline cursor-pointer px-2 py-2 shrink-0 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+              >
+                {submitting ? 'Posting...' : 'Post'}
+              </button>
+            )}
           </div>
           {draft.length >= 400 && (
             <p className="text-right text-xs text-ink/60">
@@ -665,15 +785,6 @@ export default function ReelCommentsPanel({
           )}
         </form>
       )}
-
-      {/* Report Modal for reel comments */}
-      <ReportModal
-        isOpen={Boolean(reportTarget)}
-        targetLabel={reportTarget ? `@${reportTarget.username}'s comment` : 'comment'}
-        snippet={reportTarget?.content}
-        onClose={() => setReportTarget(null)}
-        onConfirm={handleConfirmReport}
-      />
     </div>
   );
 
@@ -692,15 +803,26 @@ export default function ReelCommentsPanel({
         {panelBody}
       </div>
 
-      {/* Narrow (<1100px): slide-up bottom sheet */}
+      {/* Narrow (<1024px or touch): <= ~60% slide-up bottom sheet adjusted for visualViewport */}
       <div
         className="quad-reel-comments-mobile-wrap fixed inset-0 z-50 items-end justify-center p-0 sm:p-4"
+        style={{
+          paddingBottom:
+            mobileViewportMetrics.keyboardInsetPx > 0
+              ? `${mobileViewportMetrics.keyboardInsetPx}px`
+              : undefined,
+        }}
         onClick={(e) => {
           if (e.target === e.currentTarget) onClose();
         }}
       >
         <div
-          className="w-full max-w-lg h-[74dvh] max-h-[620px] rounded-t-[16px] sm:rounded-[16px] overflow-hidden"
+          className="quad-reel-comments-mobile-sheet w-full max-w-lg rounded-t-[16px] sm:rounded-[16px] overflow-hidden"
+          style={
+            mobileViewportMetrics.maxSheetPx
+              ? { maxHeight: `${mobileViewportMetrics.maxSheetPx}px` }
+              : undefined
+          }
           onClick={(e) => e.stopPropagation()}
         >
           {panelBody}

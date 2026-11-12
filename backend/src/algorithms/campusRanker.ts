@@ -490,6 +490,7 @@ export function rankCampusReels<T extends RankableReel>({
   const scored: Array<T & { score: number }> = [];
   for (const reel of reels) {
     const isOwner = Boolean(viewer && viewer.id === reel.authorId);
+    if (!isOwner && relations.dismissedReelIds?.has(reel.id)) continue;
     const isProcessingForOwner =
       isOwner && (reel.status === 'processing' || reel.status === 'failed');
     if ((reel.status !== 'active' && !isProcessingForOwner) || reel.authorStatus === 'banned') {

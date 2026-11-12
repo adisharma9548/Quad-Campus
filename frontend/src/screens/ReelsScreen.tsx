@@ -15,6 +15,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import ContentActionMenu from '../components/ContentActionMenu';
 import { useToast } from '../context/ToastContext';
 import { resolveApiMediaUrl } from '../services/apiClient';
 import {
@@ -70,6 +71,10 @@ export function ReelCard({
   shareCountOffset = 0,
   onRegisterControls,
 }: ReelCardProps) {
+  const { state } = useApp();
+  const isOwnReel = Boolean(
+    state.username && reel.username && state.username.toLowerCase() === reel.username.toLowerCase()
+  );
   const shouldReduceMotion = useReducedMotion();
   const [userPaused, setUserPaused] = useState(false);
   const [showHeartPop, setShowHeartPop] = useState(false);
@@ -711,6 +716,17 @@ export function ReelCard({
           >
             <Bookmark size={26} className={saved ? 'fill-current' : ''} />
           </button>
+
+          <ContentActionMenu
+            kind="reel"
+            reel={reel}
+            isOwn={isOwnReel}
+            align="right"
+            placement="top"
+            iconSize={24}
+            buttonClassName="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-[8px] quad-reel-overlay-icon pointer-events-auto"
+            testId={`reel-more-${reel.id}`}
+          />
         </div>
       </div>
 
@@ -934,6 +950,7 @@ export default function ReelsScreen({
   // Keyboard shortcuts (Space, M, ArrowLeft/Right +-5s, ArrowUp/Down/J/K)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector('[role="menu"], [role="dialog"]')) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
