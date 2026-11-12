@@ -79,6 +79,7 @@ interface ScreenComponentProps {
   onBack: () => void;
   onViewWeekItem?: (item: ThisWeekEvent) => void;
   onOpenCreateReel?: () => void;
+  onOpenPeerProfile?: (username: string, fallbackPeer?: PeerUser) => void;
 }
 
 interface ScreenConfig {
@@ -777,10 +778,10 @@ function AppShell() {
             />
           </main>
         ) : (
-          /* Responsive Web App Layout (>=1280px 3-col, 1024-1279px 2-col, 768-1023px icon-sidebar + feed, <768px 1-col + bottom bar) */
-          <div className="quad-shell-grid">
+          /* Responsive Web App Layout (>=1100px 3-col, or 2-col on Reels without right rail) */
+          <div className={`quad-shell-grid ${currentScreen === 'reels' ? 'quad-shell-grid--reels' : ''}`}>
             {/* ──── COLUMN 1: LEFT NAVIGATION SIDEBAR (768-1023px icon-only, 1024px+ 240px) ──── */}
-            <aside className="hidden md:block w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
+            <aside className="hidden md:flex md:flex-col w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
               <nav aria-label="Primary campus navigation" className="space-y-1 w-full">
                 <SidebarItem
                   icon={Compass}
@@ -832,6 +833,12 @@ function AppShell() {
                   onClick={() => navigate('settings')}
                 />
               </nav>
+
+              {currentScreen === 'reels' && (
+                <div className="hidden lg:block mt-6 pt-3 border-t border-ink/12 px-2">
+                  <QuadLegalFooter onNavigate={navigate} />
+                </div>
+              )}
             </aside>
 
             {/* ──── COLUMN 2: CENTER FLEXIBLE COLUMN ──── */}
@@ -843,44 +850,31 @@ function AppShell() {
                   onBack={goBack}
                   onViewWeekItem={setSelectedWeekItem}
                   onOpenCreateReel={() => setIsCreateReelModalOpen(true)}
+                  onOpenPeerProfile={(targetUsername, fallbackPeer) =>
+                    setSelectedProfilePeer(
+                      fallbackPeer || {
+                        id: targetUsername,
+                        username: targetUsername,
+                        initials: targetUsername.slice(0, 2).toUpperCase(),
+                        branch: null,
+                        year: null,
+                      }
+                    )
+                  }
                 />
 
-                {/* Single-place Footer when Right Rail is hidden (<1100px) */}
-                <footer className="quad-inline-footer mt-8 pt-4 border-t border-ink/12 px-2 text-xs text-ink/60 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => navigate('terms')}
-                      className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      Terms
-                    </button>
-                    <span aria-hidden="true">·</span>
-                    <button
-                      type="button"
-                      onClick={() => navigate('terms')}
-                      className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      Privacy
-                    </button>
-                    <span aria-hidden="true">·</span>
-                    <button
-                      type="button"
-                      onClick={() => navigate('safety')}
-                      className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      Help
-                    </button>
-                  </div>
-                  <p className="text-xs text-ink/60">
-                    Quad Web v{APP_VERSION} • Updated Nov 2026
-                  </p>
-                </footer>
+                {/* Single-place Footer when Right Rail is hidden (<1100px), omitted on Reels */}
+                {currentScreen !== 'reels' && (
+                  <footer className="quad-inline-footer mt-8 pt-4 border-t border-ink/12 px-2">
+                    <QuadLegalFooter onNavigate={navigate} />
+                  </footer>
+                )}
               </div>
             </main>
 
-            {/* ──── COLUMN 3: RIGHT CONTEXTUAL RAIL (>=1100px only, 340px) ──── */}
-            <aside className="quad-right-rail w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
+            {/* ──── COLUMN 3: RIGHT CONTEXTUAL RAIL (>=1100px only, 340px; hidden on Reels page) ──── */}
+            {currentScreen !== 'reels' && (
+              <aside className="quad-right-rail w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
               {/* This week card */}
               <div className="shrink-0">
                 <ThisWeekCard
@@ -1005,38 +999,12 @@ function AppShell() {
                 </div>
               </section>
 
-              {/* Footer: Terms, Privacy, Help (normal flow at bottom of right column) */}
-              <footer className="shrink-0 pt-2 border-t border-ink/12 px-2 text-xs text-ink/60 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => navigate('terms')}
-                    className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Terms
-                  </button>
-                  <span aria-hidden="true">·</span>
-                  <button
-                    type="button"
-                    onClick={() => navigate('terms')}
-                    className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Privacy
-                  </button>
-                  <span aria-hidden="true">·</span>
-                  <button
-                    type="button"
-                    onClick={() => navigate('safety')}
-                    className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Help
-                  </button>
-                </div>
-                <p className="text-xs text-ink/60">
-                  Quad Web v{APP_VERSION} • Updated Nov 2026
-                </p>
-              </footer>
-            </aside>
+                {/* Footer: Terms, Privacy, Help (normal flow at bottom of right column) */}
+                <footer className="shrink-0 pt-2 border-t border-ink/12 px-2">
+                  <QuadLegalFooter onNavigate={navigate} />
+                </footer>
+              </aside>
+            )}
           </div>
         )}
       </div>
@@ -1173,6 +1141,41 @@ function AppShell() {
           navigate('reels');
         }}
       />
+    </div>
+  );
+}
+
+function QuadLegalFooter({ onNavigate }: { onNavigate: (screen: string) => void }) {
+  return (
+    <div className="text-xs text-ink/60 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onNavigate('terms')}
+          className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Terms
+        </button>
+        <span aria-hidden="true">·</span>
+        <button
+          type="button"
+          onClick={() => onNavigate('terms')}
+          className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Privacy
+        </button>
+        <span aria-hidden="true">·</span>
+        <button
+          type="button"
+          onClick={() => onNavigate('safety')}
+          className="min-h-[44px] inline-flex items-center px-1 hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Help
+        </button>
+      </div>
+      <p className="text-xs text-ink/60">
+        Quad Web v{APP_VERSION} • Updated Nov 2026
+      </p>
     </div>
   );
 }

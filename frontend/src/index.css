@@ -163,6 +163,11 @@ body::-webkit-scrollbar {
     gap: 32px;
   }
 
+  .quad-shell-grid.quad-shell-grid--reels {
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 32px;
+  }
+
   .quad-right-rail {
     display: flex;
     flex-direction: column;
