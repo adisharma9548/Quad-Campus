@@ -89,6 +89,11 @@ export interface ReelItem {
   mediaUrl?: string;
   videoUrl?: string;
   coverUrl?: string;
+  thumbnailUrl?: string;
+  status?: 'active' | 'processing' | 'failed' | 'deleted';
+  processingError?: string | null;
+  width?: number | null;
+  height?: number | null;
   durationSec?: number;
   trimStart?: number;
   trimEnd?: number;

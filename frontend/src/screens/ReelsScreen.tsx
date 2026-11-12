@@ -13,7 +13,6 @@ import {
   Send,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../context/ToastContext';
 import { IS_REAL_BACKEND, apiRequest, resolveApiMediaUrl } from '../services/apiClient';
 import type { ReelCommentItem } from '../types/quad';
@@ -56,7 +55,6 @@ function ReelCard({
   onShare,
   shareCountOffset = 0,
 }: ReelCardProps) {
-  const { dark } = useTheme();
   const shouldReduceMotion = useReducedMotion();
   const [userPaused, setUserPaused] = useState(false);
   const [showHeartPop, setShowHeartPop] = useState(false);
@@ -71,10 +69,11 @@ function ReelCard({
   const resolvedVideoSrc = hasRealVideo
     ? resolveApiMediaUrl(reel.videoUrl || reel.mediaUrl)
     : '';
-  const resolvedCoverSrc = reel.coverUrl ? resolveApiMediaUrl(reel.coverUrl) : '';
-  const posterSrc =
-    resolvedCoverSrc || `/media/reel-${reel.posterKey || 'robotics'}-${dark ? 'dark' : 'light'}.svg`;
-  const posterLoaded = loadedSrc === posterSrc || hasRealVideo;
+  const resolvedCoverSrc = reel.coverUrl || reel.thumbnailUrl
+    ? resolveApiMediaUrl(reel.coverUrl || reel.thumbnailUrl)
+    : '';
+  const posterSrc = resolvedCoverSrc;
+  const posterLoaded = !posterSrc || loadedSrc === posterSrc || hasRealVideo;
   const isPlaying = isInView && !userPaused;
   const trimStart = Number(reel.trimStart ?? 0);
   const trimEnd = Number(reel.trimEnd ?? (reel.durationSec || 30));

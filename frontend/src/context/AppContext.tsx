@@ -368,25 +368,7 @@ const mockInitialState: AppState = {
       privacyLevel: 'group',
     },
   ],
-  reels: [
-    {
-      id: 301,
-      username: 'robo_racer',
-      initials: 'RR',
-      caption: 'Autonomous obstacle avoidance rover testing in the Mechanical workshop. 120ms latency on the onboard LIDAR.',
-      likes: 142,
-      comments: 29,
-      shares: 18,
-      views: '1.4K',
-      duration: '0:34',
-      tag: 'Robotics Lab',
-      branch: 'ME',
-      year: '4th',
-      unseen: true,
-      posterKey: 'robotics',
-      posterAlt: 'Autonomous campus rover prototype diagram from Mechanical workshop Robotics Lab',
-    },
-  ],
+  reels: [],
   threadPosts: [
     {
       id: 401,
@@ -806,6 +788,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ): Promise<AppReelItem> => {
       if (!IS_REAL_BACKEND) {
         const caption = String(formData.get('caption') || '');
+        const rawDur = Number(formData.get('durationSec'));
+        const trimStartVal = Number(formData.get('trimStart') || 0);
+        const trimEndVal = Number(formData.get('trimEnd') || (Number.isFinite(rawDur) ? rawDur : 0));
+        const realSec =
+          Number.isFinite(trimEndVal) && trimEndVal > trimStartVal
+            ? Math.max(0, trimEndVal - trimStartVal)
+            : Number.isFinite(rawDur) && rawDur > 0
+              ? rawDur
+              : undefined;
+        const formattedDur =
+          realSec !== undefined && realSec > 0
+            ? `${Math.floor(Math.round(realSec) / 60)}:${Math.round(realSec) % 60 < 10 ? '0' : ''}${Math.round(realSec) % 60}`
+            : '';
         const mockReel: AppReelItem = {
           id: Date.now(),
           username: state.username || 'quantum_dev',
@@ -814,19 +809,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
           year: (state.year || '3rd').replace(/\s*Year$/i, ''),
           caption,
           tag: 'Campus Reel',
-          duration: '0:15',
-          durationSec: Number(formData.get('durationSec') || 15),
-          trimStart: Number(formData.get('trimStart') || 0),
-          trimEnd: Number(formData.get('trimEnd') || 15),
+          duration: formattedDur,
+          durationSec: realSec,
+          trimStart: trimStartVal,
+          trimEnd: Number.isFinite(trimEndVal) ? trimEndVal : undefined,
           fitMode: formData.get('fitMode') === 'fit' ? 'fit' : 'crop',
           audience: formData.get('audience') === 'followers' ? 'followers' : 'campus',
           commentsEnabled: formData.get('commentsEnabled') !== 'false',
-          views: '1',
+          views: '0',
           likes: 0,
           comments: 0,
           shares: 0,
           unseen: false,
-          posterKey: 'robotics',
         };
         options?.onProgress?.(100);
         setState((prev) => ({ ...prev, reels: [mockReel, ...(prev.reels || [])] }));

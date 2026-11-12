@@ -943,27 +943,6 @@ export async function seedDatabase(db: DatabaseSync): Promise<boolean> {
     insertLike.run(pid, uid, new Date(now - 10 * 60 * 1000).toISOString());
   }
 
-  // Reels
-  const insertReel = db.prepare(`
-    INSERT INTO reels (id, author_id, caption, tag, duration, poster_key, poster_alt, shares_count, status, created_at_ms, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-  `);
-  insertReel.run('reel_301', 'usr_robo_racer', 'Autonomous obstacle avoidance rover testing in the Mechanical workshop. 120ms latency on the onboard LIDAR.', 'Robotics Lab', '0:34', 'robotics', 'Autonomous campus rover prototype diagram from Mechanical workshop Robotics Lab', 18, now - 1 * HOURS, new Date(now - 1 * HOURS).toISOString());
-  insertReel.run('reel_302', 'usr_ai_architect', 'Benchmarking local LLM inference on student workstation GPUs. 45 tokens/sec with 4-bit quantisation.', 'AI Lab', '0:52', 'ai', 'Concentric inference compute graph poster for AI Lab quantization benchmark reel', 38, now - 2 * HOURS, new Date(now - 2 * HOURS).toISOString());
-  insertReel.run('reel_303', 'usr_green_circuit', 'Solar tracking sensor array built for our energy harvesting project on the terrace of Block B.', 'IoT Lab', '0:28', 'solar', 'Dual-axis solar tracking panel array schematic on Block B terrace', 7, now - 4 * HOURS, new Date(now - 4 * HOURS).toISOString());
-  insertReel.run('reel_304', 'usr_drone_pilot', 'Hexacopter PID stabilization test over the sports ground. Compensating for 18 knot wind gusts in real-time.', 'Aerospace Wing', '0:45', 'drone', 'Quadcopter rotor stabilization wireframe over the campus sports field', 42, now - 6 * HOURS, new Date(now - 6 * HOURS).toISOString());
-  insertReel.run('reel_305', 'usr_seed_quantum_dev', 'Custom WebGL audio waveform visualizer written with Rust WASM running at steady 120 FPS in Chrome.', 'Graphics Lab', '0:38', 'webgl', 'Real-time WebGL audio frequency bars visualizer rendered via Rust WASM', 24, now - 8 * HOURS, new Date(now - 8 * HOURS).toISOString());
-
-  // Already viewed reels for quantum_dev: 304 and 305 (so 301, 302, 303 remain unseen!)
-  const insertView = db.prepare('INSERT OR IGNORE INTO reel_views (reel_id, user_id, viewed_at) VALUES (?, ?, ?)');
-  insertView.run('reel_304', 'usr_seed_quantum_dev', new Date(now - 2 * HOURS).toISOString());
-  insertView.run('reel_305', 'usr_seed_quantum_dev', new Date(now - 3 * HOURS).toISOString());
-
-  const insertReelLike = db.prepare('INSERT OR IGNORE INTO reel_likes (reel_id, user_id, created_at) VALUES (?, ?, ?)');
-  insertReelLike.run('reel_301', 'usr_ai_architect', new Date(now - 30 * 60 * 1000).toISOString());
-  insertReelLike.run('reel_302', 'usr_seed_quantum_dev', new Date(now - 30 * 60 * 1000).toISOString());
-  insertReelLike.run('reel_304', 'usr_robo_racer', new Date(now - 30 * 60 * 1000).toISOString());
-
   // Threads
   const insertThread = db.prepare('INSERT INTO threads (id, author_id, content, status, created_at_ms, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   insertThread.run('thread_401', 'usr_compiler_fan', 'Question for 3rd/4th years: When designing a recursive descent parser for the language design elective, is it better to hand-roll the AST nodes or generate them via visitor pattern?', 'active', now - 35 * 60 * 1000, new Date(now - 35 * 60 * 1000).toISOString());

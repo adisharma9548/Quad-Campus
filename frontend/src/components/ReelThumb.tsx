@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Eye } from 'lucide-react';
+import { Play, Eye, Film } from 'lucide-react';
 import { Skeleton } from './ui';
-import { useTheme } from '../context/ThemeContext';
+import { resolveApiMediaUrl } from '../services/apiClient';
 import type { ReelItem } from '../types/quad';
 
 export function ReelThumbSkeleton() {
@@ -25,13 +25,11 @@ export interface ReelThumbProps {
 }
 
 export function ReelThumb({ reel, onClick }: ReelThumbProps) {
-  const { dark } = useTheme();
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
-  const posterSrc = reel.posterUrl || (reel.posterKey
-    ? `/media/reel-${reel.posterKey}-${dark ? 'dark' : 'light'}.svg`
-    : null);
+  const rawPoster = reel.coverUrl || reel.thumbnailUrl || reel.posterUrl || '';
+  const posterSrc = rawPoster ? resolveApiMediaUrl(rawPoster) : null;
   const loaded = !posterSrc || loadedSrc === posterSrc;
 
   useEffect(() => {
@@ -56,17 +54,21 @@ export function ReelThumb({ reel, onClick }: ReelThumbProps) {
         {posterSrc && !loaded && (
           <Skeleton variant="rect" className="w-full h-full absolute inset-0" />
         )}
-        {posterSrc && (
+        {posterSrc ? (
           <img
             ref={imgRef}
             src={posterSrc}
-            alt={reel.posterAlt || `${reel.tag || 'Campus'} reel poster by @${reel.username}`}
+            alt={reel.posterAlt || `${reel.tag || 'Campus'} reel cover by @${reel.username}`}
             onLoad={() => setLoadedSrc(posterSrc)}
             onError={() => setLoadedSrc(posterSrc)}
             className={`w-full h-full object-cover transition-opacity duration-250 ${
               loaded ? 'opacity-100' : 'opacity-0'
             }`}
           />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-ink/30">
+            <Film size={28} aria-hidden="true" />
+          </div>
         )}
 
         {/* Centered Play Icon */}
