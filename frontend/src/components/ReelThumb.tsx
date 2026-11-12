@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Eye, Film } from 'lucide-react';
+import { Play, Eye, Film, Loader2 } from 'lucide-react';
 import { Skeleton } from './ui';
 import { resolveApiMediaUrl } from '../services/apiClient';
+import { resolveReelDurationLabel } from '../utils/formatDuration';
 import type { ReelItem } from '../types/quad';
 
 export function ReelThumbSkeleton() {
@@ -31,6 +32,8 @@ export function ReelThumb({ reel, onClick }: ReelThumbProps) {
   const rawPoster = reel.coverUrl || reel.thumbnailUrl || reel.posterUrl || '';
   const posterSrc = rawPoster ? resolveApiMediaUrl(rawPoster) : null;
   const loaded = !posterSrc || loadedSrc === posterSrc;
+  const durationLabel = resolveReelDurationLabel(reel);
+  const isProcessing = reel.status === 'processing';
 
   useEffect(() => {
     if (posterSrc && imgRef.current && imgRef.current.complete) {
@@ -71,6 +74,18 @@ export function ReelThumb({ reel, onClick }: ReelThumbProps) {
           </div>
         )}
 
+        {/* Top Duration / Processing Pill (only rendered when known or processing) */}
+        {isProcessing ? (
+          <div className="absolute top-2 right-2 px-2 py-1 rounded-full bg-canvas border border-ink/12 text-[10px] font-semibold text-ink inline-flex items-center gap-1 pointer-events-none">
+            <Loader2 size={10} className="animate-spin" aria-hidden="true" />
+            <span>Processing</span>
+          </div>
+        ) : durationLabel ? (
+          <div className="absolute top-2 right-2 px-2 py-1 rounded-full bg-canvas border border-ink/12 text-[10px] font-semibold text-ink pointer-events-none">
+            {durationLabel}
+          </div>
+        ) : null}
+
         {/* Centered Play Icon */}
         <div
           aria-hidden="true"
@@ -88,7 +103,7 @@ export function ReelThumb({ reel, onClick }: ReelThumbProps) {
           </p>
           <p className="text-[11px] text-ink/60 flex items-center gap-1 mt-1 leading-none">
             <Eye size={12} className="text-ink/60 shrink-0" aria-hidden="true" />
-            <span>{reel.views || '1.2K'}</span>
+            <span>{reel.views ?? '0'}</span>
           </p>
         </div>
       </div>

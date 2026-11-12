@@ -11,10 +11,18 @@ import {
   Music,
   Film,
   Send,
+  Loader2,
+  AlertCircle,
+  RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useToast } from '../context/ToastContext';
 import { IS_REAL_BACKEND, apiRequest, resolveApiMediaUrl } from '../services/apiClient';
+import {
+  formatPlaybackSeconds,
+  formatTotalSeconds,
+  resolveReelDurationLabel,
+} from '../utils/formatDuration';
 import type { ReelCommentItem } from '../types/quad';
 import {
   Avatar,
@@ -58,72 +66,120 @@ function ReelCard({
   const shouldReduceMotion = useReducedMotion();
   const [userPaused, setUserPaused] = useState(false);
   const [showHeartPop, setShowHeartPop] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [videoDurationSec, setVideoDurationSec] = useState<number | null>(
+    typeof reel.durationSec === 'number' && Number.isFinite(reel.durationSec) && reel.durationSec > 0
+      ? reel.durationSec
+      : null
+  );
+  const [videoLoadedData, setVideoLoadedData] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [videoError, setVideoError] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bgVideoRef = useRef<HTMLVideoElement | null>(null);
   const lastTapRef = useRef(0);
 
-  const hasRealVideo = Boolean(reel.videoUrl || reel.mediaUrl);
+  const isProcessing = reel.status === 'processing';
+  const isFailed = reel.status === 'failed';
+  const hasRealVideo = !isProcessing && !isFailed && Boolean(reel.videoUrl || reel.mediaUrl);
   const resolvedVideoSrc = hasRealVideo
     ? resolveApiMediaUrl(reel.videoUrl || reel.mediaUrl)
     : '';
-  const resolvedCoverSrc = reel.coverUrl || reel.thumbnailUrl
-    ? resolveApiMediaUrl(reel.coverUrl || reel.thumbnailUrl)
-    : '';
-  const posterSrc = resolvedCoverSrc;
-  const posterLoaded = !posterSrc || loadedSrc === posterSrc || hasRealVideo;
-  const isPlaying = isInView && !userPaused;
-  const trimStart = Number(reel.trimStart ?? 0);
-  const trimEnd = Number(reel.trimEnd ?? (reel.durationSec || 30));
+  const resolvedCoverSrc =
+    reel.coverUrl || reel.thumbnailUrl
+      ? resolveApiMediaUrl(reel.coverUrl || reel.thumbnailUrl)
+      : '';
+  const totalSec =
+    videoDurationSec && videoDurationSec > 0
+      ? videoDurationSec
+      : typeof reel.durationSec === 'number' && Number.isFinite(reel.durationSec) && reel.durationSec > 0
+        ? reel.durationSec
+        : 0;
+  const durationBadgeLabel =
+    totalSec > 0 ? formatTotalSeconds(totalSec) : resolveReelDurationLabel(reel);
+  const progress =
+    hasRealVideo && totalSec > 0
+      ? Math.min(100, Math.max(0, (currentTimeSec / totalSec) * 100))
+      : 0;
+  const isPlaying = hasRealVideo && isInView && !userPaused && !videoError;
 
+  // Sync play/pause & mute directly with the real <video> element
   useEffect(() => {
-    if (!hasRealVideo && imgRef.current && imgRef.current.complete) {
-      setLoadedSrc(posterSrc);
-    }
-  }, [hasRealVideo, posterSrc]);
-
-  // Real <video> playback when uploaded video is present; simulated progress bar for legacy SVG reels
-  useEffect(() => {
-    if (hasRealVideo) {
-      const v = videoRef.current;
-      if (!v) return;
-      v.muted = isMuted;
-      if (isPlaying) {
-        if (v.currentTime < trimStart || v.currentTime >= trimEnd) {
-          v.currentTime = trimStart;
+    if (!hasRealVideo) return undefined;
+    const v = videoRef.current;
+    if (!v) return undefined;
+    v.muted = isMuted;
+    if (isPlaying) {
+      v.play().catch(() => {});
+      if (bgVideoRef.current) {
+        if (Math.abs(bgVideoRef.current.currentTime - v.currentTime) > 0.35) {
+          bgVideoRef.current.currentTime = v.currentTime;
         }
-        v.play().catch(() => {});
-        bgVideoRef.current?.play().catch(() => {});
-      } else {
-        v.pause();
-        bgVideoRef.current?.pause();
+        bgVideoRef.current.play().catch(() => {});
       }
-      return undefined;
+    } else {
+      v.pause();
+      bgVideoRef.current?.pause();
     }
+    return undefined;
+  }, [hasRealVideo, isMuted, isPlaying]);
 
+  // Smooth frame-accurate timeline & live timestamp sync while playing
+  useEffect(() => {
     if (!isPlaying) return undefined;
-    const interval = setInterval(() => {
-      setProgress((prev) => (prev >= 100 ? 0 : prev + 1.25));
-    }, 200);
-    return () => clearInterval(interval);
-  }, [hasRealVideo, isMuted, isPlaying, trimEnd, trimStart]);
+    let rafId = 0;
+    const syncFrame = () => {
+      const v = videoRef.current;
+      if (v) {
+        if (Number.isFinite(v.duration) && v.duration > 0) {
+          setVideoDurationSec(v.duration);
+        }
+        setCurrentTimeSec(v.currentTime);
+        if (
+          bgVideoRef.current &&
+          Math.abs(bgVideoRef.current.currentTime - v.currentTime) > 0.35
+        ) {
+          bgVideoRef.current.currentTime = v.currentTime;
+        }
+      }
+      rafId = window.requestAnimationFrame(syncFrame);
+    };
+    rafId = window.requestAnimationFrame(syncFrame);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isPlaying]);
 
-  // Reset progress & pause state when scrolled off-screen
+  // Reset pause state when scrolled off-screen
   useEffect(() => {
     if (!isInView) {
+      const v = videoRef.current;
+      if (v) v.pause();
+      bgVideoRef.current?.pause();
       const resetTimer = setTimeout(() => {
-        setProgress(0);
         setUserPaused(false);
+        setIsBuffering(false);
       }, 0);
       return () => clearTimeout(resetTimer);
     }
     return undefined;
   }, [isInView]);
 
+  const handleRetryVideo = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    const v = videoRef.current;
+    setVideoError(false);
+    setVideoLoadedData(false);
+    setIsBuffering(true);
+    if (v) {
+      v.load();
+      if (isInView && !userPaused) {
+        v.play().catch(() => {});
+      }
+    }
+  };
+
   const handleVideoTap = (e: React.MouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
+    if (!hasRealVideo || videoError) return;
     const now = Date.now();
     if (now - lastTapRef.current < 300) {
       if (!liked) onToggleLike(reel.id);
@@ -141,29 +197,32 @@ function ReelCard({
     <div
       ref={slideRef}
       data-reel-id={reel.id}
+      onContextMenu={(e) => e.preventDefault()}
       className="h-full max-h-full aspect-[9/16] max-w-full rounded-[16px] bg-canvas border border-ink/12 overflow-hidden relative flex flex-col justify-between p-4 select-none text-ink"
     >
-      {/* Interactive Poster / Video Viewport */}
+      {/* Interactive Video Stage (prevents native right-click video menu) */}
       <div
         role="button"
         tabIndex={0}
         aria-label={
-          isPlaying
-            ? `Pause reel by @${reel.username}: ${reel.tag}`
-            : `Play reel by @${reel.username}: ${reel.tag}`
+          isProcessing
+            ? `Reel by @${reel.username} is still processing`
+            : isPlaying
+              ? `Pause reel by @${reel.username}: ${reel.tag}`
+              : `Play reel by @${reel.username}: ${reel.tag}`
         }
+        onContextMenu={(e) => e.preventDefault()}
         onClick={handleVideoTap}
         onKeyDown={(e) => {
           if (e.key === ' ' || e.key === 'Enter') {
             e.preventDefault();
-            setUserPaused((prev) => !prev);
+            if (hasRealVideo && !videoError) {
+              setUserPaused((prev) => !prev);
+            }
           }
         }}
         className="absolute inset-0 bg-ink/6 cursor-pointer overflow-hidden flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
-        {!posterLoaded && (
-          <Skeleton variant="rect" className="w-full h-full absolute inset-0" />
-        )}
         {hasRealVideo ? (
           <>
             {reel.fitMode === 'fit' && (
@@ -172,52 +231,149 @@ function ReelCard({
                 src={resolvedVideoSrc}
                 muted
                 playsInline
+                loop
+                preload="metadata"
+                controls={false}
+                controlsList="nodownload noplaybackrate noremoteplayback"
+                disablePictureInPicture
+                disableRemotePlayback
                 aria-hidden="true"
+                onContextMenu={(e) => e.preventDefault()}
                 className="w-full h-full object-cover scale-110 blur-xl opacity-60 absolute inset-0 pointer-events-none"
               />
             )}
             <video
               ref={videoRef}
               src={resolvedVideoSrc}
-              poster={resolvedCoverSrc || undefined}
               muted={isMuted}
               playsInline
               loop
+              preload="metadata"
+              controls={false}
+              controlsList="nodownload noplaybackrate noremoteplayback"
+              disablePictureInPicture
+              disableRemotePlayback
+              onContextMenu={(e) => e.preventDefault()}
+              onLoadedMetadata={() => {
+                const v = videoRef.current;
+                if (v && Number.isFinite(v.duration) && v.duration > 0) {
+                  setVideoDurationSec(v.duration);
+                }
+              }}
+              onLoadedData={() => {
+                setVideoLoadedData(true);
+                setIsBuffering(false);
+                setVideoError(false);
+              }}
+              onWaiting={() => {
+                if (isInView && !userPaused) setIsBuffering(true);
+              }}
+              onCanPlay={() => setIsBuffering(false)}
+              onPlaying={() => setIsBuffering(false)}
+              onError={() => {
+                setIsBuffering(false);
+                setVideoError(true);
+              }}
               onTimeUpdate={() => {
                 const v = videoRef.current;
                 if (!v) return;
-                const span = Math.max(1, trimEnd - trimStart);
-                if (v.currentTime < trimStart) v.currentTime = trimStart;
-                else if (trimEnd > trimStart && v.currentTime >= trimEnd) v.currentTime = trimStart;
-                setProgress(Math.min(100, Math.max(0, ((v.currentTime - trimStart) / span) * 100)));
+                setCurrentTimeSec(v.currentTime);
               }}
-              className={`relative z-10 w-full h-full ${
+              onSeeked={() => {
+                const v = videoRef.current;
+                if (v) setCurrentTimeSec(v.currentTime);
+              }}
+              className={`relative z-10 w-full h-full pointer-events-none ${
                 reel.fitMode === 'fit' ? 'object-contain' : 'object-cover'
               }`}
             />
+            {resolvedCoverSrc && (
+              <img
+                src={resolvedCoverSrc}
+                alt={reel.posterAlt || `${reel.tag} cover frame`}
+                className={`absolute inset-0 z-10 w-full h-full ${
+                  reel.fitMode === 'fit' ? 'object-contain' : 'object-cover'
+                } pointer-events-none transition-opacity duration-200 ${
+                  videoLoadedData ? 'opacity-0' : 'opacity-100'
+                }`}
+              />
+            )}
           </>
-        ) : (
+        ) : resolvedCoverSrc ? (
           <img
-            ref={imgRef}
-            src={posterSrc}
-            alt={reel.posterAlt || `${reel.tag} demonstration reel by @${reel.username}`}
-            onLoad={() => setLoadedSrc(posterSrc)}
-            onError={() => setLoadedSrc(posterSrc)}
-            className={`w-full h-full object-cover ${
-              shouldReduceMotion ? '' : 'transition-opacity duration-250'
-            } ${posterLoaded ? 'opacity-100' : 'opacity-0'}`}
+            src={resolvedCoverSrc}
+            alt={reel.posterAlt || `${reel.tag} by @${reel.username}`}
+            className="w-full h-full object-cover pointer-events-none"
           />
+        ) : (
+          <Skeleton variant="rect" className="w-full h-full absolute inset-0 pointer-events-none" />
+        )}
+
+        {/* Processing / Failed State */}
+        {(isProcessing || isFailed) && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-6 text-center bg-canvas/85 pointer-events-none">
+            {isProcessing ? (
+              <>
+                <Loader2 size={28} className="animate-spin text-accent" aria-hidden="true" />
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-ink">Processing your reel...</p>
+                  <p className="text-xs text-ink/60">
+                    Optimizing video for smooth playback. Only visible to you until ready.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <AlertCircle size={28} className="text-danger" aria-hidden="true" />
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-ink">Video processing failed</p>
+                  <p className="text-xs text-ink/60">
+                    {reel.processingError || 'Please remove this upload and try another file.'}
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Buffering Spinner */}
+        {hasRealVideo && isBuffering && !videoError && !userPaused && isInView && (
+          <div
+            aria-label="Buffering video"
+            className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
+          >
+            <div className="w-12 h-12 rounded-full bg-canvas/85 border border-ink/12 flex items-center justify-center">
+              <Loader2 size={22} className="animate-spin text-ink" />
+            </div>
+          </div>
+        )}
+
+        {/* Playback Error + Retry Overlay */}
+        {hasRealVideo && videoError && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-6 text-center bg-canvas/85 pointer-events-auto">
+            <AlertCircle size={28} className="text-danger" aria-hidden="true" />
+            <p className="text-sm font-semibold text-ink">Unable to load this video</p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={RotateCcw}
+              onClick={handleRetryVideo}
+            >
+              Try again
+            </Button>
+          </div>
         )}
 
         {/* Paused Overlay */}
         <AnimatePresence>
-          {(!isPlaying || userPaused) && (
+          {hasRealVideo && !videoError && (!isPlaying || userPaused) && (
             <motion.div
               initial={shouldReduceMotion ? { opacity: 1 } : { scale: 0.9, opacity: 0 }}
               animate={shouldReduceMotion ? { opacity: 1 } : { scale: 1, opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: shouldReduceMotion ? 0 : 0.15, ease: [0.4, 0, 0.2, 1] }}
-              className="absolute inset-0 flex items-center justify-center pointer-events-none bg-canvas/40"
+              className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none bg-canvas/40"
             >
               <div className="w-16 h-16 rounded-full bg-canvas border border-ink/12 text-ink flex items-center justify-center">
                 <Play size={24} fill="currentColor" />
@@ -242,13 +398,25 @@ function ReelCard({
         </AnimatePresence>
       </div>
 
-      {/* Top Controls: Tag + Duration & Mute Toggle */}
-      <div className="relative z-20 flex items-center justify-between gap-2 pointer-events-auto">
-        <div className="flex items-center gap-2">
+      {/* Top Controls: Tag + Real Synced Duration Pill & Mute Toggle */}
+      <div className="relative z-20 flex items-center justify-between gap-2 pointer-events-none">
+        <div className="flex items-center gap-2 pointer-events-auto">
           <Badge variant="status">{reel.tag}</Badge>
-          <span className="px-2 py-1 rounded-full bg-canvas border border-ink/12 text-xs font-semibold text-ink">
-            {reel.duration}
-          </span>
+          {isProcessing ? (
+            <span className="px-2 py-1 rounded-full bg-canvas border border-ink/12 text-xs font-semibold text-ink inline-flex items-center gap-1">
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+              <span>Processing</span>
+            </span>
+          ) : durationBadgeLabel ? (
+            <span
+              data-testid="reel-duration-pill"
+              className="px-2 py-1 rounded-full bg-canvas border border-ink/12 text-xs font-semibold text-ink tabular-nums"
+            >
+              {hasRealVideo && (currentTimeSec > 0 || videoLoadedData)
+                ? `${formatPlaybackSeconds(currentTimeSec)} / ${durationBadgeLabel}`
+                : durationBadgeLabel}
+            </span>
+          ) : null}
         </div>
 
         <button
@@ -259,15 +427,15 @@ function ReelCard({
           }}
           aria-pressed={!isMuted}
           aria-label={isMuted ? 'Unmute reel audio' : 'Mute reel audio'}
-          className="min-h-[44px] min-w-[44px] p-2 rounded-full bg-canvas border border-ink/12 text-ink hover:bg-ink/8 active:bg-ink/12 transition-colors duration-150 cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="pointer-events-auto min-h-[44px] min-w-[44px] p-2 rounded-full bg-canvas border border-ink/12 text-ink hover:bg-ink/8 active:bg-ink/12 transition-colors duration-150 cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
         </button>
       </div>
 
       {/* Bottom Creator Card + Right Action Rail */}
-      <div className="relative z-20 flex items-end justify-between gap-3 pointer-events-auto pt-6">
-        <div className="space-y-2 flex-1 min-w-0 bg-canvas p-3 rounded-[16px] border border-ink/12">
+      <div className="relative z-20 flex items-end justify-between gap-3 pointer-events-none pt-6">
+        <div className="pointer-events-auto space-y-2 flex-1 min-w-0 bg-canvas p-3 rounded-[16px] border border-ink/12">
           <div className="flex items-center gap-2 min-w-0">
             <Avatar initials={reel.initials} size={40} />
             <div className="min-w-0">
@@ -275,14 +443,18 @@ function ReelCard({
                 @{reel.username}
               </p>
               <p className="text-xs text-ink/60 truncate">
-                {reel.branch} • {reel.year} Year
+                {reel.branch && reel.year
+                  ? `${reel.branch} • ${reel.year} Year`
+                  : 'Campus Member'}
               </p>
             </div>
           </div>
 
-          <p className="text-xs text-ink leading-relaxed line-clamp-3 break-words">
-            {reel.caption}
-          </p>
+          {reel.caption && (
+            <p className="text-xs text-ink leading-relaxed line-clamp-3 break-words">
+              {reel.caption}
+            </p>
+          )}
 
           <div className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-ink/6 border border-ink/12 text-xs text-ink/60 max-w-full">
             <Music size={16} className="shrink-0" />
@@ -291,7 +463,7 @@ function ReelCard({
         </div>
 
         {/* Right Action Rail: Like (filled Ink heart), Comment, Share, Save */}
-        <div className="flex flex-col items-center gap-2 shrink-0">
+        <div className="pointer-events-auto flex flex-col items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={(e) => {
@@ -383,11 +555,7 @@ function ReelCard({
         className="absolute inset-x-0 bottom-0 h-1 bg-ink/12 overflow-hidden pointer-events-none z-20"
       >
         <div
-          className={`h-full bg-accent ${
-            shouldReduceMotion
-              ? ''
-              : 'transition-all duration-150 ease-[cubic-bezier(0.4,0,0.2,1)]'
-          }`}
+          className="h-full bg-accent"
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -610,7 +778,7 @@ export default function ReelsScreen({
               slideRef={(el) => {
                 slideRefs.current[reel.id] = el;
               }}
-              isInView={isPageVisible && String(visibleReelId) === String(reel.id)}
+              isInView={isPageVisible && String(visibleReelId ?? reels[0]?.id ?? '') === String(reel.id)}
               isMuted={isMuted}
               onToggleMute={() => setIsMuted((prev) => !prev)}
               liked={Boolean(reel.isLiked)}
