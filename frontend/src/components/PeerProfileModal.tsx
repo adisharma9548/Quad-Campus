@@ -1,10 +1,23 @@
 import React, { useEffect, useState } from 'react';
-import { Check, Heart, Lock, MessageSquare, ShieldCheck, UserPlus } from 'lucide-react';
+import {
+  Check,
+  Film,
+  Heart,
+  Lock,
+  MessageSquare,
+  Play,
+  ShieldCheck,
+  UserPlus,
+} from 'lucide-react';
 import { Avatar, Badge, Button, Card, Modal, Spinner } from './ui';
 import { useApp } from '../context/AppContext';
 import { useToast } from '../context/ToastContext';
-import { IS_REAL_BACKEND, apiRequest } from '../services/apiClient';
+import { IS_REAL_BACKEND, apiRequest, resolveApiMediaUrl } from '../services/apiClient';
+import { resolveReelDurationLabel } from '../utils/formatDuration';
+import { ReelCard } from '../screens/ReelsScreen';
 import type { PeerProfileData, PeerUser } from '../types/quad';
+
+const REEL_MUTE_STORAGE_KEY = 'quad_reels_muted';
 
 interface PeerProfileModalProps {
   username: string | null;
@@ -17,12 +30,35 @@ export function PeerProfileModal({
   fallbackPeer,
   onClose,
 }: PeerProfileModalProps) {
-  const { state, requestFollow } = useApp();
+  const { state, requestFollow, toggleReelLike } = useApp();
   const { showToast } = useToast();
 
   const [profile, setProfile] = useState<PeerProfileData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewingReelId, setViewingReelId] = useState<string | number | null>(null);
+  const [savedReels, setSavedReels] = useState<Record<string, boolean>>({});
+  const [shareOffsets, setShareOffsets] = useState<Record<string, number>>({});
+  const [isMuted, setIsMuted] = useState<boolean>(() => {
+    try {
+      const stored = sessionStorage.getItem(REEL_MUTE_STORAGE_KEY);
+      return stored === null ? true : stored === '1';
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleMute = () => {
+    setIsMuted((prev) => {
+      const next = !prev;
+      try {
+        sessionStorage.setItem(REEL_MUTE_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  };
   const [requestBusy, setRequestBusy] = useState(false);
 
   useEffect(() => {
@@ -44,6 +80,11 @@ export function PeerProfileModal({
       }
       const isFollowing = (state.following || []).some((f) => f.username === username) || Boolean(peer.isFollowing);
       const publicPosts = (state.publicPosts || []).filter((p) => p.username === username);
+      const peerReels = (state.reels || []).filter(
+        (r) =>
+          r.username === username &&
+          (state.username === username || (r.status || 'active') === 'active')
+      );
       setProfile({
         user: {
           ...peer,
@@ -53,6 +94,7 @@ export function PeerProfileModal({
         },
         publicPosts,
         personalPosts: [],
+        reels: peerReels,
       });
       setError(null);
       return;
@@ -255,8 +297,128 @@ export function PeerProfileModal({
               </div>
             )}
           </div>
+
+          {/* Campus Reels */}
+          {(profile?.reels || []).length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-ink/60 px-1 flex items-center gap-1">
+                <Film size={13} aria-hidden="true" />
+                <span>Reels ({(profile?.reels || []).length})</span>
+              </h4>
+              <div className="grid grid-cols-3 gap-3">
+                {(profile?.reels || []).map((reel) => {
+                  const thumbSrc = resolveApiMediaUrl(reel.coverUrl || reel.thumbnailUrl);
+                  const durationLabel = resolveReelDurationLabel(reel);
+                  return (
+                    <button
+                      key={String(reel.id)}
+                      type="button"
+                      onClick={() => setViewingReelId(reel.id)}
+                      className="relative aspect-[9/16] rounded-[10px] overflow-hidden border border-ink/12 bg-ink/8 text-left cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      aria-label={reel.caption ? `Watch reel: ${reel.caption}` : 'Watch reel'}
+                    >
+                      {thumbSrc ? (
+                        <img
+                          src={thumbSrc}
+                          alt={reel.caption || 'Reel thumbnail'}
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-ink/10">
+                          <Film size={18} className="text-ink/40" aria-hidden="true" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-black/15 pointer-events-none" />
+                      {durationLabel && (
+                        <span className="absolute top-2 left-2 px-2 py-1 rounded-[5px] text-[10px] font-bold bg-black/70 text-white pointer-events-none">
+                          {durationLabel}
+                        </span>
+                      )}
+                      <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1 text-[10px] font-semibold text-white pointer-events-none">
+                        <Play size={11} className="fill-white text-white" aria-hidden="true" />
+                        <span>{reel.views ?? '0'}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       ) : null}
+
+      {/* Peer Reel Viewer Modal */}
+      {(() => {
+        const activeReels = profile?.reels || [];
+        const baseReel =
+          viewingReelId !== null
+            ? activeReels.find((r) => String(r.id) === String(viewingReelId)) || null
+            : null;
+        const globalMatch = baseReel
+          ? (state.reels || []).find((r) => String(r.id) === String(baseReel.id))
+          : null;
+        const viewingReel = baseReel ? { ...baseReel, ...(globalMatch || {}) } : null;
+
+        return (
+          <Modal
+            isOpen={Boolean(viewingReel)}
+            onClose={() => setViewingReelId(null)}
+            title={viewingReel ? `@${viewingReel.username}'s Reel` : 'Reel'}
+            size="lg"
+          >
+            {viewingReel && (
+              <div className="h-[68vh] max-h-[640px] flex items-center justify-center">
+                <ReelCard
+                  reel={viewingReel}
+                  isInView
+                  isMuted={isMuted}
+                  onToggleMute={handleToggleMute}
+                  liked={Boolean(viewingReel.isLiked)}
+                  onToggleLike={async (id) => {
+                    const res = await toggleReelLike(id);
+                    if (res) {
+                      setProfile((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              reels: (prev.reels || []).map((r) =>
+                                String(r.id) === String(id)
+                                  ? { ...r, likes: res.likes, isLiked: res.liked }
+                                  : r
+                              ),
+                            }
+                          : prev
+                      );
+                    }
+                  }}
+                  saved={Boolean(savedReels[String(viewingReel.id)])}
+                  onToggleSave={(id) => {
+                    const key = String(id);
+                    setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
+                  }}
+                  onOpenComments={() => {
+                    showToast('Open Campus Reels to read or post comments on this reel', 'info');
+                  }}
+                  onShare={(reel) => {
+                    const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
+                      String(reel.id)
+                    )}`;
+                    if (navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(shareUrl).catch(() => {});
+                    }
+                    setShareOffsets((prev) => ({
+                      ...prev,
+                      [String(reel.id)]: (prev[String(reel.id)] || 0) + 1,
+                    }));
+                    showToast(`Copied link to @${reel.username}'s reel`, 'success');
+                  }}
+                  shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
+                />
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
     </Modal>
   );
 }

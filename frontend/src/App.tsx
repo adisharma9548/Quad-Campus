@@ -78,6 +78,7 @@ interface ScreenComponentProps {
   onNext: (screen?: string) => void;
   onBack: () => void;
   onViewWeekItem?: (item: ThisWeekEvent) => void;
+  onOpenCreateReel?: () => void;
 }
 
 interface ScreenConfig {
@@ -841,6 +842,7 @@ function AppShell() {
                   onNavigate={navigate}
                   onBack={goBack}
                   onViewWeekItem={setSelectedWeekItem}
+                  onOpenCreateReel={() => setIsCreateReelModalOpen(true)}
                 />
 
                 {/* Single-place Footer when Right Rail is hidden (<1100px) */}

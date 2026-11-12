@@ -22,6 +22,7 @@ import {
 } from '../middleware/auth.ts';
 import { canViewerSeePost } from '../algorithms/campusRanker.ts';
 import { loadAllPostsWithStats, serializePostForResponse } from './feed.ts';
+import { loadReelsWithStats } from './social.ts';
 import { getDiscoverableUsers } from '../services/discovery.ts';
 import type { AuthMiddleware, LoginAttemptRow, UserRow } from '../types.ts';
 import { hashPassword, signSessionToken, verifyPasswordHash } from '../utils/crypto.ts';
@@ -726,6 +727,17 @@ export function registerAuthRoutes(
         ? allPosts.filter((p) => p.space === 'personal').slice(0, 20).map(serializePostForResponse)
         : [];
 
+      const peerReels = loadReelsWithStats(db, viewerRow.id)
+        .filter((r) => {
+          if (r.authorId !== target.id) return false;
+          if (isSelf) return r.status !== 'deleted';
+          if (r.status !== 'active') return false;
+          if (r.audience === 'followers' && !isFollowing) return false;
+          return true;
+        })
+        .slice(0, 24)
+        .map(({ authorId: _a, authorStatus: _s, score: _sc, ...rest }) => rest);
+
       return {
         user: {
           ...toPeerUser(target),
@@ -739,6 +751,7 @@ export function registerAuthRoutes(
         },
         publicPosts,
         personalPosts,
+        reels: peerReels,
       };
     }
   );

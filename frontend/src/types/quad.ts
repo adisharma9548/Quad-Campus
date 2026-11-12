@@ -192,6 +192,7 @@ export interface PeerProfileData {
   };
   publicPosts: PostItem[];
   personalPosts: PostItem[];
+  reels?: ReelItem[];
 }
 
 export interface FollowRequestItem {

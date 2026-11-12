@@ -108,7 +108,7 @@ interface ThreadReplyDto {
   replies: ThreadReplyDto[];
 }
 
-function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem[] {
+export function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): ReelItem[] {
   const rows = viewerId
     ? (db
         .prepare(`
@@ -924,6 +924,70 @@ export function registerSocialRoutes(
       return { liked: !exists, likes: Number(likesRow.count) };
     }
   );
+
+  const deleteReelHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string } }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const reelId = String(request.params.id);
+    const viewer = request.auth!.userRow;
+    const reelRow = db
+      .prepare(
+        'SELECT id, author_id, status, media_id, cover_media_id FROM reels WHERE id = ?'
+      )
+      .get(reelId) as
+      | {
+          id: string;
+          author_id: string;
+          status: string;
+          media_id: string | null;
+          cover_media_id: string | null;
+        }
+      | undefined;
+
+    if (!reelRow || reelRow.status === 'deleted') {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+    }
+    if (reelRow.author_id !== viewer.id && viewer.role !== 'admin') {
+      return reply.code(403).send({
+        error: { code: 'FORBIDDEN', message: 'You can only delete your own reels.' },
+      });
+    }
+
+    const openReport = db
+      .prepare(
+        "SELECT 1 FROM reports WHERE target_type = 'reel' AND target_id = ? AND status = 'pending' LIMIT 1"
+      )
+      .get(reelId);
+    const retainForModeration = Boolean(openReport);
+
+    db.prepare('DELETE FROM reel_likes WHERE reel_id = ?').run(reelId);
+    db.prepare('DELETE FROM reel_comments WHERE reel_id = ?').run(reelId);
+    db.prepare('DELETE FROM reel_views WHERE reel_id = ?').run(reelId);
+    db.prepare("DELETE FROM notifications WHERE target_type = 'reel' AND target_id = ?").run(reelId);
+
+    if (retainForModeration) {
+      db.prepare("UPDATE reels SET status = 'deleted' WHERE id = ?").run(reelId);
+    } else {
+      db.prepare(
+        "UPDATE reels SET status = 'deleted', video_path = NULL, thumbnail_path = NULL, cover_path = NULL, media_id = NULL, cover_media_id = NULL WHERE id = ?"
+      ).run(reelId);
+      const assetIds = [reelRow.media_id, reelRow.cover_media_id].filter((x): x is string => Boolean(x));
+      for (const assetId of assetIds) {
+        db.prepare('DELETE FROM media_assets WHERE id = ?').run(assetId);
+      }
+      await deleteReelUploadDir(uploadDir, reelId).catch(() => {});
+    }
+
+    return {
+      deleted: true,
+      id: reelId,
+      retainedForModeration: retainForModeration,
+    };
+  };
+
+  app.delete<{ Params: { id: string } }>('/api/v1/reels/:id', { preHandler: auth.requireAuth }, deleteReelHandler);
+  app.delete<{ Params: { id: string } }>('/api/reels/:id', { preHandler: auth.requireAuth }, deleteReelHandler);
 
   // ── 2. Threads & Connected Nested Replies ──────────────────────────────
   const DEFAULT_THREAD_REPLY_DEPTH = 2; // 0-indexed: loads levels 0, 1, 2 initially

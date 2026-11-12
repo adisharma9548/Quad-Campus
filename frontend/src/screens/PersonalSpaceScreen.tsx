@@ -11,11 +11,18 @@ import {
   MessageSquare,
   Shield,
   FileText,
+  Film,
+  MoreHorizontal,
+  Play,
+  Trash2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { useInstitution } from '../context/ConfigContext';
 import { useToast } from '../context/ToastContext';
 import { resolveApiMediaUrl } from '../services/apiClient';
+import { resolveReelDurationLabel } from '../utils/formatDuration';
+import { ReelCard } from './ReelsScreen';
+import type { ReelItem } from '../types/quad';
 import {
   Avatar,
   Badge,
@@ -27,22 +34,78 @@ import {
   EmptyState,
 } from '../components/ui';
 
+const REEL_MUTE_STORAGE_KEY = 'quad_reels_muted';
+
 export default function PersonalSpaceScreen({
   onNavigate,
+  onOpenCreateReel,
 }: {
   onNavigate: (screen: string) => void;
+  onOpenCreateReel?: () => void;
 }) {
-  const { state, toggleProfileVisibility, togglePostLike } = useApp();
+  const { state, toggleProfileVisibility, togglePostLike, toggleReelLike, deleteReel } = useApp();
   const institution = useInstitution();
   const { showToast } = useToast();
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [activeGroupFilter, setActiveGroupFilter] = useState('All');
+  const [activeTab, setActiveTab] = useState<'posts' | 'reels'>('posts');
+  const [openReelMenuId, setOpenReelMenuId] = useState<string | null>(null);
+  const [deleteConfirmReel, setDeleteConfirmReel] = useState<ReelItem | null>(null);
+  const [isDeletingReel, setIsDeletingReel] = useState(false);
+  const [viewingReelId, setViewingReelId] = useState<string | number | null>(null);
+  const [savedReels, setSavedReels] = useState<Record<string, boolean>>({});
+  const [shareOffsets, setShareOffsets] = useState<Record<string, number>>({});
+  const [isMuted, setIsMuted] = useState<boolean>(() => {
+    try {
+      const stored = sessionStorage.getItem(REEL_MUTE_STORAGE_KEY);
+      return stored === null ? true : stored === '1';
+    } catch {
+      return true;
+    }
+  });
 
   const isPublic = state.profilePublic || false;
   const username = state.username || 'quantum_dev';
   const initials = state.userInitials || 'QD';
   const personalPosts = state.personalPosts || [];
   const followRequests = state.followRequests || [];
+  const myReels = (state.reels || []).filter(
+    (r) => r.username === username && r.status !== 'deleted'
+  );
+  const viewingReel =
+    viewingReelId !== null
+      ? myReels.find((r) => String(r.id) === String(viewingReelId)) || null
+      : null;
+
+  const handleToggleMute = () => {
+    setIsMuted((prev) => {
+      const next = !prev;
+      try {
+        sessionStorage.setItem(REEL_MUTE_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  };
+
+  const handleConfirmDeleteReel = async () => {
+    if (!deleteConfirmReel || isDeletingReel) return;
+    const target = deleteConfirmReel;
+    setIsDeletingReel(true);
+    try {
+      await deleteReel(target.id);
+      if (viewingReelId !== null && String(viewingReelId) === String(target.id)) {
+        setViewingReelId(null);
+      }
+      setDeleteConfirmReel(null);
+      showToast('Reel deleted permanently', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to delete reel', 'error');
+    } finally {
+      setIsDeletingReel(false);
+    }
+  };
   const groupsMap = state.followerGroups || {};
 
   const followerGroups = [
@@ -216,91 +279,359 @@ export default function PersonalSpaceScreen({
         />
       )}
 
-      {/* Circle Filters */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-ink/60">
-            Audience Circle Views
-          </h3>
-          <span className="text-xs text-ink/60">Filtered by circle</span>
-        </div>
-
-        <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
-          {followerGroups.map((g) => (
-            <button
-              key={g.name}
-              type="button"
-              onClick={() => setActiveGroupFilter(g.name)}
-              className={`min-h-[44px] px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer border active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                activeGroupFilter === g.name
-                  ? 'bg-ink text-canvas border-ink font-bold'
-                  : 'bg-canvas text-ink/60 border-ink/12 hover:bg-ink/8 hover:text-ink'
-              }`}
-            >
-              {g.name} ({g.count})
-            </button>
-          ))}
-        </div>
+      {/* Section Switcher: Vault Posts | Reels */}
+      <div
+        role="tablist"
+        aria-label="Personal space sections"
+        className="flex items-center gap-2 border-b border-ink/12 pb-3"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'posts'}
+          onClick={() => setActiveTab('posts')}
+          className={`min-h-[40px] px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer border inline-flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+            activeTab === 'posts'
+              ? 'bg-ink text-canvas border-ink font-bold'
+              : 'bg-canvas text-ink/70 border-ink/12 hover:bg-ink/6 hover:text-ink'
+          }`}
+        >
+          <FileText size={14} aria-hidden="true" />
+          <span>Vault Posts ({personalPosts.length})</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'reels'}
+          onClick={() => {
+            setActiveTab('reels');
+            setOpenReelMenuId(null);
+          }}
+          className={`min-h-[40px] px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer border inline-flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+            activeTab === 'reels'
+              ? 'bg-ink text-canvas border-ink font-bold'
+              : 'bg-canvas text-ink/70 border-ink/12 hover:bg-ink/6 hover:text-ink'
+          }`}
+        >
+          <Film size={14} aria-hidden="true" />
+          <span>Reels ({myReels.length})</span>
+        </button>
       </div>
 
-      {/* Personal Posts Stream */}
-      {filteredPosts.length === 0 ? (
-        <EmptyState
-          icon={FileText}
-          title="Vault Stream Empty"
-          description={`No personal posts found for circle "${activeGroupFilter}". Create a post to share privately with approved peers.`}
-        />
+      {activeTab === 'posts' ? (
+        <>
+          {/* Circle Filters */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-ink/60">
+                Audience Circle Views
+              </h3>
+              <span className="text-xs text-ink/60">Filtered by circle</span>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
+              {followerGroups.map((g) => (
+                <button
+                  key={g.name}
+                  type="button"
+                  onClick={() => setActiveGroupFilter(g.name)}
+                  className={`min-h-[44px] px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer border active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                    activeGroupFilter === g.name
+                      ? 'bg-ink text-canvas border-ink font-bold'
+                      : 'bg-canvas text-ink/60 border-ink/12 hover:bg-ink/8 hover:text-ink'
+                  }`}
+                >
+                  {g.name} ({g.count})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Personal Posts Stream */}
+          {filteredPosts.length === 0 ? (
+            <EmptyState
+              icon={FileText}
+              title="Vault Stream Empty"
+              description={`No personal posts found for circle "${activeGroupFilter}". Create a post to share privately with approved peers.`}
+            />
+          ) : (
+            <div className="space-y-4">
+              {filteredPosts.map((post) => (
+                <Card
+                  key={post.id}
+                  className="p-4 sm:p-6 bg-canvas border border-ink/12 rounded-[16px] space-y-4 hover:border-ink/24 transition-colors"
+                >
+                  <div className="flex items-center justify-between">
+                    <PrivacyBadge
+                      level="group"
+                      labelCustom={`Visible to: ${post.groupName || post.audienceLabel || post.audience}`}
+                      size="sm"
+                    />
+                    <span className="text-xs text-ink/60">{post.timestamp}</span>
+                  </div>
+                  <p className="text-sm text-ink leading-relaxed font-normal break-words">
+                    {post.content}
+                  </p>
+                  {post.hasImage && post.mediaUrl && (
+                    <div className="aspect-video w-full rounded-[8px] overflow-hidden border border-ink/12 bg-ink/6">
+                      <img
+                        src={resolveApiMediaUrl(post.mediaUrl)}
+                        alt={post.imageAlt || post.location || 'Private circle attachment'}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-4 pt-3 border-t border-ink/12 text-xs text-ink/60">
+                    <button
+                      type="button"
+                      onClick={() => togglePostLike(post.id)}
+                      className="min-h-[44px] inline-flex items-center gap-2 font-medium text-ink hover:text-accent cursor-pointer"
+                    >
+                      <Heart
+                        size={16}
+                        className={post.isLiked ? 'fill-ink text-ink' : 'text-ink'}
+                      />{' '}
+                      {post.likes || 0}
+                    </button>
+                    <span className="flex items-center gap-2 font-medium">
+                      <MessageSquare size={16} /> {post.comments || 0}
+                    </span>
+                    <span className="ml-auto text-xs text-ink font-semibold flex items-center gap-2">
+                      <Shield size={16} className="text-accent" />
+                      <span>Circle Protected</span>
+                    </span>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </>
       ) : (
         <div className="space-y-4">
-          {filteredPosts.map((post) => (
-            <Card
-              key={post.id}
-              className="p-4 sm:p-6 bg-canvas border border-ink/12 rounded-[16px] space-y-4 hover:border-ink/24 transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <PrivacyBadge
-                  level="group"
-                  labelCustom={`Visible to: ${post.groupName || post.audienceLabel || post.audience}`}
+          {myReels.length === 0 ? (
+            <EmptyState
+              icon={Film}
+              title="You haven't posted any reels yet"
+              description="Share short campus project demos, lab walkthroughs, or event highlights with verified peers."
+              action={
+                <Button
+                  variant="primary"
                   size="sm"
-                />
-                <span className="text-xs text-ink/60">{post.timestamp}</span>
-              </div>
-              <p className="text-sm text-ink leading-relaxed font-normal break-words">
-                {post.content}
-              </p>
-              {post.hasImage && post.mediaUrl && (
-                <div className="aspect-video w-full rounded-[8px] overflow-hidden border border-ink/12 bg-ink/6">
-                  <img
-                    src={resolveApiMediaUrl(post.mediaUrl)}
-                    alt={post.imageAlt || post.location || 'Private circle attachment'}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              )}
-              <div className="flex items-center gap-4 pt-3 border-t border-ink/12 text-xs text-ink/60">
-                <button
-                  type="button"
-                  onClick={() => togglePostLike(post.id)}
-                  className="min-h-[44px] inline-flex items-center gap-2 font-medium text-ink hover:text-accent cursor-pointer"
+                  icon={Film}
+                  onClick={() => {
+                    if (onOpenCreateReel) {
+                      onOpenCreateReel();
+                    } else {
+                      onNavigate('reels');
+                    }
+                  }}
                 >
-                  <Heart
-                    size={16}
-                    className={post.isLiked ? 'fill-ink text-ink' : 'text-ink'}
-                  />{' '}
-                  {post.likes || 0}
-                </button>
-                <span className="flex items-center gap-2 font-medium">
-                  <MessageSquare size={16} /> {post.comments || 0}
-                </span>
-                <span className="ml-auto text-xs text-ink font-semibold flex items-center gap-2">
-                  <Shield size={16} className="text-accent" />
-                  <span>Circle Protected</span>
-                </span>
-              </div>
-            </Card>
-          ))}
+                  Upload Reel
+                </Button>
+              }
+            />
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {myReels.map((reel) => {
+                const idStr = String(reel.id);
+                const thumbSrc = resolveApiMediaUrl(reel.coverUrl || reel.thumbnailUrl);
+                const durationLabel = resolveReelDurationLabel(reel);
+                const isMenuOpen = openReelMenuId === idStr;
+                const statusBadge =
+                  reel.status === 'processing'
+                    ? 'Processing'
+                    : reel.status === 'failed'
+                    ? 'Failed'
+                    : durationLabel;
+
+                return (
+                  <div
+                    key={idStr}
+                    className="relative aspect-[9/16] rounded-[12px] overflow-hidden border border-ink/12 bg-ink/8 group"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenReelMenuId(null);
+                        setViewingReelId(reel.id);
+                      }}
+                      className="w-full h-full block text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      aria-label={reel.caption ? `Open reel: ${reel.caption}` : 'Open reel'}
+                    >
+                      {thumbSrc ? (
+                        <img
+                          src={thumbSrc}
+                          alt={reel.caption || 'Reel thumbnail'}
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-ink/10">
+                          <Film size={24} className="text-ink/40" aria-hidden="true" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-black/20 pointer-events-none" />
+                      {statusBadge && (
+                        <span
+                          className={`absolute top-2 left-2 px-2 py-1 rounded-[6px] text-[10px] font-bold tracking-wide pointer-events-none ${
+                            reel.status === 'failed'
+                              ? 'bg-danger text-canvas'
+                              : 'bg-black/70 text-white'
+                          }`}
+                        >
+                          {statusBadge}
+                        </span>
+                      )}
+                      <div className="absolute bottom-2 left-2 right-2 space-y-1 pointer-events-none">
+                        <div className="flex items-center gap-1 text-[11px] font-semibold text-white">
+                          <Play size={12} className="fill-white text-white" aria-hidden="true" />
+                          <span>{reel.views ?? '0'}</span>
+                        </div>
+                        {reel.caption && (
+                          <p className="text-[11px] text-white/90 line-clamp-2 leading-snug">
+                            {reel.caption}
+                          </p>
+                        )}
+                      </div>
+                    </button>
+
+                    {/* Top-right Actions Menu */}
+                    <div className="absolute top-2 right-2 z-10">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenReelMenuId((prev) => (prev === idStr ? null : idStr));
+                        }}
+                        aria-label="Reel options"
+                        aria-expanded={isMenuOpen}
+                        className="w-8 h-8 rounded-full bg-black/65 text-white hover:bg-black/85 flex items-center justify-center cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      >
+                        <MoreHorizontal size={16} aria-hidden="true" />
+                      </button>
+                      {isMenuOpen && (
+                        <div
+                          className="absolute right-0 mt-1 w-32 rounded-[10px] bg-canvas border border-ink/12 shadow-lg py-1 z-20"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenReelMenuId(null);
+                              setDeleteConfirmReel(reel);
+                            }}
+                            className="w-full px-3 py-2 text-left text-xs font-semibold text-danger hover:bg-ink/6 flex items-center gap-2 cursor-pointer"
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
+
+      {/* Reel Viewer Modal */}
+      <Modal
+        isOpen={Boolean(viewingReel)}
+        onClose={() => setViewingReelId(null)}
+        title={viewingReel ? `@${viewingReel.username}'s Reel` : 'Reel'}
+        size="lg"
+      >
+        {viewingReel && (
+          <div className="space-y-3">
+            <div className="h-[68vh] max-h-[640px] flex items-center justify-center">
+              <ReelCard
+                reel={viewingReel}
+                isInView
+                isMuted={isMuted}
+                onToggleMute={handleToggleMute}
+                liked={Boolean(viewingReel.isLiked)}
+                onToggleLike={async (id) => {
+                  await toggleReelLike(id);
+                }}
+                saved={Boolean(savedReels[String(viewingReel.id)])}
+                onToggleSave={(id) => {
+                  const key = String(id);
+                  setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
+                }}
+                onOpenComments={() => {
+                  showToast('Open Campus Reels to read or post comments on this reel', 'info');
+                }}
+                onShare={(reel) => {
+                  const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
+                    String(reel.id)
+                  )}`;
+                  if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(shareUrl).catch(() => {});
+                  }
+                  setShareOffsets((prev) => ({
+                    ...prev,
+                    [String(reel.id)]: (prev[String(reel.id)] || 0) + 1,
+                  }));
+                  showToast(`Copied link to @${reel.username}'s reel`, 'success');
+                }}
+                shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
+              />
+            </div>
+            <div className="flex items-center justify-between pt-2 border-t border-ink/12">
+              <span className="text-xs text-ink/60">
+                {resolveReelDurationLabel(viewingReel)
+                  ? `Duration: ${resolveReelDurationLabel(viewingReel)}`
+                  : viewingReel.status === 'processing'
+                  ? 'Processing video...'
+                  : 'Campus Reel'}
+              </span>
+              <Button
+                variant="destructive"
+                size="sm"
+                icon={Trash2}
+                onClick={() => setDeleteConfirmReel(viewingReel)}
+              >
+                Delete Reel
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Delete Reel Confirmation Modal */}
+      <Modal
+        isOpen={Boolean(deleteConfirmReel)}
+        onClose={() => {
+          if (!isDeletingReel) setDeleteConfirmReel(null);
+        }}
+        title="Delete Reel"
+        description="Delete this reel? This can't be undone."
+      >
+        <div className="space-y-4">
+          {deleteConfirmReel?.caption && (
+            <div className="p-3 rounded-[10px] bg-ink/4 border border-ink/12">
+              <p className="text-xs text-ink/80 line-clamp-2">{deleteConfirmReel.caption}</p>
+            </div>
+          )}
+          <div className="flex gap-3 justify-end">
+            <Button
+              variant="secondary"
+              disabled={isDeletingReel}
+              onClick={() => setDeleteConfirmReel(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              loading={isDeletingReel}
+              onClick={handleConfirmDeleteReel}
+            >
+              Delete
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Standard Foundation Modal for Confirmation */}
       <Modal

@@ -175,6 +175,7 @@ export interface AppContextValue {
   markBestAnswer: (postId: string | number, answerId: string) => Promise<void>;
   markNotificationsRead: () => Promise<void>;
   deletePost: (postId: string | number) => Promise<void>;
+  deleteReel: (reelId: string | number) => Promise<void>;
   editPost: (
     postId: string | number,
     patch: { title?: string; content: string }
@@ -1003,6 +1004,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const deleteReel = useCallback(async (reelId: string | number) => {
+    const idStr = String(reelId);
+    let previousReels: AppReelItem[] = [];
+    setState((prev) => {
+      previousReels = prev.reels || [];
+      return {
+        ...prev,
+        reels: previousReels.filter((r) => String(r.id) !== idStr),
+      };
+    });
+    try {
+      if (IS_REAL_BACKEND) {
+        await apiRequest(`/reels/${encodeURIComponent(idStr)}`, { method: 'DELETE' });
+      }
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        reels: previousReels,
+      }));
+      throw err;
+    }
+  }, []);
+
   const editPost = useCallback(
     async (
       postId: string | number,
@@ -1554,6 +1578,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         markBestAnswer,
         markNotificationsRead,
         deletePost,
+        deleteReel,
         editPost,
         addPostAnswer,
         toggleProfileVisibility,
