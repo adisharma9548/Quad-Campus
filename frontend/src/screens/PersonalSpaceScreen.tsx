@@ -583,6 +583,8 @@ export default function PersonalSpaceScreen({
                     showToast(`Copied link to @${reel.username}'s reel`, 'success');
                   }}
                   shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
+                  layoutContext="modal"
+                  isCommentsOpen={reelCommentsOpen}
                 />
               </div>
               <ReelCommentsPanel

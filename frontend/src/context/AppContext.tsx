@@ -1198,11 +1198,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const requestFollow = useCallback(async (username: string) => {
+    const cleanTarget = username.toLowerCase();
     if (!IS_REAL_BACKEND) {
       setState((prev) => ({
         ...prev,
         discoverableUsers: (prev.discoverableUsers || []).filter((u) => u.username !== username),
         whoToFollow: (prev.whoToFollow || []).filter((u) => u.username !== username),
+        reels: (prev.reels || []).map((r) =>
+          r.username.toLowerCase() === cleanTarget ? { ...r, followStatus: 'requested' } : r
+        ),
       }));
       return { status: 'requested' };
     }
@@ -1210,10 +1214,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       body: { targetUsername: username },
     });
+    const nextFollowStatus: 'following' | 'requested' =
+      res.status === 'following' ? 'following' : 'requested';
     setState((prev) => ({
       ...prev,
       discoverableUsers: (prev.discoverableUsers || []).filter((u) => u.username !== username),
       whoToFollow: (prev.whoToFollow || []).filter((u) => u.username !== username),
+      reels: (prev.reels || []).map((r) =>
+        r.username.toLowerCase() === cleanTarget ? { ...r, followStatus: nextFollowStatus } : r
+      ),
     }));
     await Promise.all([
       res.status === 'following' ? refreshSocialOverview() : Promise.resolve(),

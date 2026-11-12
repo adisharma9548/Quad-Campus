@@ -13,8 +13,10 @@ import {
   Loader2,
   AlertCircle,
   RotateCcw,
+  Check,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { useIsDesktopReel } from '../hooks/useIsDesktopReel';
 import ContentActionMenu from '../components/ContentActionMenu';
 import { useToast } from '../context/ToastContext';
 import { resolveApiMediaUrl } from '../services/apiClient';
@@ -52,6 +54,8 @@ export interface ReelCardProps {
   onOpenProfile?: (username: string, fallbackPeer?: import('../types/quad').PeerUser) => void;
   shareCountOffset?: number;
   onRegisterControls?: (id: string | number, controls: ReelCardControls | null) => void;
+  layoutContext?: 'page' | 'modal';
+  isCommentsOpen?: boolean;
 }
 
 /* ─── Individual 9:16 Reel Player Card ─── */
@@ -70,8 +74,11 @@ export function ReelCard({
   onOpenProfile,
   shareCountOffset = 0,
   onRegisterControls,
+  layoutContext = 'page',
+  isCommentsOpen = false,
 }: ReelCardProps) {
-  const { state } = useApp();
+  const { state, requestFollow } = useApp();
+  const isDesktopReel = useIsDesktopReel();
   const isOwnReel = Boolean(
     state.username && reel.username && state.username.toLowerCase() === reel.username.toLowerCase()
   );
@@ -91,11 +98,39 @@ export function ReelCard({
   const [isPlayerHovered, setIsPlayerHovered] = useState(false);
   const [isFocusWithin, setIsFocusWithin] = useState(false);
   const [controlsAwake, setControlsAwake] = useState(true);
+  const [captionExpanded, setCaptionExpanded] = useState(false);
+  const [optimisticFollowStatus, setOptimisticFollowStatus] = useState<
+    'following' | 'requested' | null
+  >(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bgVideoRef = useRef<HTMLVideoElement | null>(null);
   const seekTrackRef = useRef<HTMLDivElement | null>(null);
   const hideControlsTimerRef = useRef<number | null>(null);
   const lastTapRef = useRef(0);
+
+  const isFollowing =
+    reel.followStatus === 'following' ||
+    optimisticFollowStatus === 'following' ||
+    (state.following || []).some(
+      (f) => f.username.toLowerCase() === reel.username.toLowerCase()
+    );
+  const isRequested =
+    !isFollowing &&
+    (reel.followStatus === 'requested' || optimisticFollowStatus === 'requested');
+
+  const handleFollow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isFollowing || isRequested) return;
+    setOptimisticFollowStatus('requested');
+    try {
+      const res = await requestFollow(reel.username);
+      if (res?.status === 'following') {
+        setOptimisticFollowStatus('following');
+      }
+    } catch {
+      setOptimisticFollowStatus(null);
+    }
+  };
 
   const isProcessing = reel.status === 'processing';
   const isFailed = reel.status === 'failed';
@@ -121,12 +156,17 @@ export function ReelCard({
       : 0;
   const isPlaying = hasRealVideo && isInView && !userPaused && !videoError;
 
-  // Sync play/pause & mute directly with the real <video> element
+  const latestTimeRef = useRef(0);
+
+  // Sync play/pause & mute directly with the real <video> element (preserve currentTime across resizes)
   useEffect(() => {
     if (!hasRealVideo) return undefined;
     const v = videoRef.current;
     if (!v) return undefined;
     v.muted = isMuted;
+    if (latestTimeRef.current > 0 && Math.abs(v.currentTime - latestTimeRef.current) > 0.35) {
+      v.currentTime = latestTimeRef.current;
+    }
     if (isPlaying) {
       v.play().catch(() => {});
       if (bgVideoRef.current) {
@@ -140,7 +180,7 @@ export function ReelCard({
       bgVideoRef.current?.pause();
     }
     return undefined;
-  }, [hasRealVideo, isMuted, isPlaying]);
+  }, [hasRealVideo, isDesktopReel, isMuted, isPlaying]);
 
   // Smooth frame-accurate timeline & live timestamp sync while playing
   useEffect(() => {
@@ -152,6 +192,7 @@ export function ReelCard({
         if (Number.isFinite(v.duration) && v.duration > 0) {
           setVideoDurationSec(v.duration);
         }
+        latestTimeRef.current = v.currentTime;
         setCurrentTimeSec(v.currentTime);
         if (
           bgVideoRef.current &&
@@ -176,13 +217,13 @@ export function ReelCard({
   const wakeControls = useCallback(() => {
     setControlsAwake(true);
     clearHideControlsTimer();
-    if (isPlaying && isInView) {
+    if (!isDesktopReel && isPlaying && isInView) {
       hideControlsTimerRef.current = window.setTimeout(() => {
         setControlsAwake(false);
         hideControlsTimerRef.current = null;
       }, 3000);
     }
-  }, [clearHideControlsTimer, isInView, isPlaying]);
+  }, [clearHideControlsTimer, isDesktopReel, isInView, isPlaying]);
 
   const handleOpenAuthorProfile = useCallback(
     (e: React.MouseEvent) => {
@@ -198,16 +239,16 @@ export function ReelCard({
     [onOpenProfile, reel.authorId, reel.branch, reel.initials, reel.username, reel.year]
   );
 
-  // Auto-hide controls 3 seconds after playback starts or idle
+  // Auto-hide controls 3 seconds after playback starts or idle (phone/tablet only)
   useEffect(() => {
     clearHideControlsTimer();
-    if (!isPlaying || !isInView) return undefined;
+    if (isDesktopReel || !isPlaying || !isInView) return undefined;
     hideControlsTimerRef.current = window.setTimeout(() => {
       setControlsAwake(false);
       hideControlsTimerRef.current = null;
     }, 3000);
     return () => clearHideControlsTimer();
-  }, [clearHideControlsTimer, isInView, isPlaying]);
+  }, [clearHideControlsTimer, isDesktopReel, isInView, isPlaying]);
 
   // Reset pause state & overlay timers when scrolled off-screen
   useEffect(() => {
@@ -252,6 +293,7 @@ export function ReelCard({
       if (bgVideoRef.current) {
         bgVideoRef.current.currentTime = clamped;
       }
+      latestTimeRef.current = clamped;
       setCurrentTimeSec(clamped);
     },
     [hasRealVideo, totalSec]
@@ -310,19 +352,22 @@ export function ReelCard({
     e.stopPropagation();
     wakeControls();
     if (!hasRealVideo || videoError) return;
-    const now = Date.now();
-    if (now - lastTapRef.current < 280) {
-      if (!liked) onToggleLike(reel.id);
-      if (!shouldReduceMotion) {
-        setShowHeartPop(true);
-        setTimeout(() => setShowHeartPop(false), 600);
+    if (!isDesktopReel) {
+      const now = Date.now();
+      if (now - lastTapRef.current < 280) {
+        if (!liked) onToggleLike(reel.id);
+        if (!shouldReduceMotion) {
+          setShowHeartPop(true);
+          setTimeout(() => setShowHeartPop(false), 600);
+        }
       }
+      lastTapRef.current = now;
     }
     togglePlayPause();
-    lastTapRef.current = now;
   };
 
-  const controlsVisible = !isPlaying || isFocusWithin || isDraggingSeek || controlsAwake;
+  const controlsVisible =
+    isDesktopReel || !isPlaying || isFocusWithin || isDraggingSeek || controlsAwake;
   useEffect(() => {
     if (!isInView) return undefined;
     window.dispatchEvent(new CustomEvent('quad:reels-controls-visible', { detail: controlsVisible }));
@@ -343,75 +388,38 @@ export function ReelCard({
       ? `${formatPlaybackSeconds(currentTimeSec)} / ${durationBadgeLabel}`
       : '';
 
-  return (
+  const renderVideoStage = (isDesktop: boolean) => (
     <div
-      ref={slideRef}
-      data-reel-id={reel.id}
+      role="button"
+      tabIndex={0}
+      aria-label={
+        isProcessing
+          ? `Reel by @${reel.username} is still processing`
+          : isPlaying
+            ? `Pause reel by @${reel.username}: ${reel.tag}`
+            : `Play reel by @${reel.username}: ${reel.tag}`
+      }
       onContextMenu={(e) => e.preventDefault()}
-      onMouseEnter={() => {
-        setIsPlayerHovered(true);
-        wakeControls();
-      }}
-      onMouseLeave={() => {
-        setIsPlayerHovered(false);
-      }}
-      onMouseMove={wakeControls}
-      onPointerDown={wakeControls}
-      onFocusCapture={() => {
-        setIsFocusWithin(true);
-        wakeControls();
-      }}
-      onBlurCapture={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-          setIsFocusWithin(false);
+      onClick={handleVideoTap}
+      onKeyDown={(e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          togglePlayPause();
         }
       }}
-      className="quad-reel-phone-stage h-full max-h-full aspect-[9/16] max-w-full rounded-[16px] bg-canvas border border-ink/12 overflow-hidden relative flex flex-col justify-end p-4 pb-4 select-none text-ink"
+      className={
+        isDesktop
+          ? 'quad-reel-desktop-video-frame focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+          : 'absolute inset-0 bg-ink/6 cursor-pointer overflow-hidden flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent'
+      }
     >
-      {/* Interactive Video Stage (prevents native right-click video menu) */}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={
-          isProcessing
-            ? `Reel by @${reel.username} is still processing`
-            : isPlaying
-              ? `Pause reel by @${reel.username}: ${reel.tag}`
-              : `Play reel by @${reel.username}: ${reel.tag}`
-        }
-        onContextMenu={(e) => e.preventDefault()}
-        onClick={handleVideoTap}
-        onKeyDown={(e) => {
-          if (e.key === ' ' || e.key === 'Enter') {
-            e.preventDefault();
-            togglePlayPause();
-          }
-        }}
-        className="absolute inset-0 bg-ink/6 cursor-pointer overflow-hidden flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      >
-        {hasRealVideo ? (
-          <>
-            {reel.fitMode === 'fit' && (
-              <video
-                ref={bgVideoRef}
-                src={resolvedVideoSrc}
-                muted
-                playsInline
-                loop
-                preload="metadata"
-                controls={false}
-                controlsList="nodownload noplaybackrate noremoteplayback"
-                disablePictureInPicture
-                disableRemotePlayback
-                aria-hidden="true"
-                onContextMenu={(e) => e.preventDefault()}
-                className="w-full h-full object-cover scale-110 blur-xl opacity-60 absolute inset-0 pointer-events-none"
-              />
-            )}
+      {hasRealVideo ? (
+        <>
+          {reel.fitMode === 'fit' && (
             <video
-              ref={videoRef}
+              ref={bgVideoRef}
               src={resolvedVideoSrc}
-              muted={isMuted}
+              muted
               playsInline
               loop
               preload="metadata"
@@ -419,120 +427,145 @@ export function ReelCard({
               controlsList="nodownload noplaybackrate noremoteplayback"
               disablePictureInPicture
               disableRemotePlayback
+              aria-hidden="true"
               onContextMenu={(e) => e.preventDefault()}
-              onLoadedMetadata={() => {
-                const v = videoRef.current;
-                if (v && Number.isFinite(v.duration) && v.duration > 0) {
+              className="w-full h-full object-cover scale-110 blur-xl opacity-60 absolute inset-0 pointer-events-none"
+            />
+          )}
+          <video
+            ref={videoRef}
+            src={resolvedVideoSrc}
+            muted={isMuted}
+            playsInline
+            loop
+            preload="metadata"
+            controls={false}
+            controlsList="nodownload noplaybackrate noremoteplayback"
+            disablePictureInPicture
+            disableRemotePlayback
+            onContextMenu={(e) => e.preventDefault()}
+            onLoadedMetadata={() => {
+              const v = videoRef.current;
+              if (v) {
+                if (Number.isFinite(v.duration) && v.duration > 0) {
                   setVideoDurationSec(v.duration);
                 }
-              }}
-              onLoadedData={() => {
-                setVideoLoadedData(true);
-                setIsBuffering(false);
-                setVideoError(false);
-              }}
-              onWaiting={() => {
-                if (isInView && !userPaused) setIsBuffering(true);
-              }}
-              onCanPlay={() => setIsBuffering(false)}
-              onPlaying={() => setIsBuffering(false)}
-              onError={() => {
-                setIsBuffering(false);
-                setVideoError(true);
-              }}
-              onTimeUpdate={() => {
-                const v = videoRef.current;
-                if (!v) return;
+                if (latestTimeRef.current > 0 && Math.abs(v.currentTime - latestTimeRef.current) > 0.35) {
+                  v.currentTime = latestTimeRef.current;
+                }
+              }
+            }}
+            onLoadedData={() => {
+              setVideoLoadedData(true);
+              setIsBuffering(false);
+              setVideoError(false);
+            }}
+            onWaiting={() => {
+              if (isInView && !userPaused) setIsBuffering(true);
+            }}
+            onCanPlay={() => setIsBuffering(false)}
+            onPlaying={() => setIsBuffering(false)}
+            onError={() => {
+              setIsBuffering(false);
+              setVideoError(true);
+            }}
+            onTimeUpdate={() => {
+              const v = videoRef.current;
+              if (!v) return;
+              latestTimeRef.current = v.currentTime;
+              setCurrentTimeSec(v.currentTime);
+            }}
+            onSeeked={() => {
+              const v = videoRef.current;
+              if (v) {
+                latestTimeRef.current = v.currentTime;
                 setCurrentTimeSec(v.currentTime);
-              }}
-              onSeeked={() => {
-                const v = videoRef.current;
-                if (v) setCurrentTimeSec(v.currentTime);
-              }}
-              className={`relative z-10 w-full h-full pointer-events-none ${
+              }
+            }}
+            className={`relative z-10 w-full h-full pointer-events-none ${
+              reel.fitMode === 'fit' ? 'object-contain' : 'object-cover'
+            }`}
+          />
+          {resolvedCoverSrc && (
+            <img
+              src={resolvedCoverSrc}
+              alt={reel.posterAlt || `${reel.tag} cover frame`}
+              className={`absolute inset-0 z-10 w-full h-full ${
                 reel.fitMode === 'fit' ? 'object-contain' : 'object-cover'
+              } pointer-events-none transition-opacity duration-200 ${
+                videoLoadedData ? 'opacity-0' : 'opacity-100'
               }`}
             />
-            {resolvedCoverSrc && (
-              <img
-                src={resolvedCoverSrc}
-                alt={reel.posterAlt || `${reel.tag} cover frame`}
-                className={`absolute inset-0 z-10 w-full h-full ${
-                  reel.fitMode === 'fit' ? 'object-contain' : 'object-cover'
-                } pointer-events-none transition-opacity duration-200 ${
-                  videoLoadedData ? 'opacity-0' : 'opacity-100'
-                }`}
-              />
-            )}
-          </>
-        ) : resolvedCoverSrc ? (
-          <img
-            src={resolvedCoverSrc}
-            alt={reel.posterAlt || `${reel.tag} by @${reel.username}`}
-            className="w-full h-full object-cover pointer-events-none"
-          />
-        ) : (
-          <Skeleton variant="rect" className="w-full h-full absolute inset-0 pointer-events-none" />
-        )}
+          )}
+        </>
+      ) : resolvedCoverSrc ? (
+        <img
+          src={resolvedCoverSrc}
+          alt={reel.posterAlt || `${reel.tag} by @${reel.username}`}
+          className="w-full h-full object-cover pointer-events-none"
+        />
+      ) : (
+        <Skeleton variant="rect" className="w-full h-full absolute inset-0 pointer-events-none" />
+      )}
 
-        {/* Processing / Failed State */}
-        {(isProcessing || isFailed) && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-6 text-center bg-canvas/85 pointer-events-none">
-            {isProcessing ? (
-              <>
-                <Loader2 size={28} className="animate-spin text-accent" aria-hidden="true" />
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-ink">Processing your reel...</p>
-                  <p className="text-xs text-ink/60">
-                    Optimizing video for smooth playback. Only visible to you until ready.
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <AlertCircle size={28} className="text-danger" aria-hidden="true" />
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-ink">Video processing failed</p>
-                  <p className="text-xs text-ink/60">
-                    {reel.processingError || 'Please remove this upload and try another file.'}
-                  </p>
-                </div>
-              </>
-            )}
+      {/* Processing / Failed State */}
+      {(isProcessing || isFailed) && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-6 text-center bg-canvas/85 pointer-events-none">
+          {isProcessing ? (
+            <>
+              <Loader2 size={28} className="animate-spin text-accent" aria-hidden="true" />
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-ink">Processing your reel...</p>
+                <p className="text-xs text-ink/60">
+                  Optimizing video for smooth playback. Only visible to you until ready.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <AlertCircle size={28} className="text-danger" aria-hidden="true" />
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-ink">Video processing failed</p>
+                <p className="text-xs text-ink/60">
+                  {reel.processingError || 'Please remove this upload and try another file.'}
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Buffering Spinner */}
+      {hasRealVideo && isBuffering && !videoError && !userPaused && isInView && (
+        <div
+          aria-label="Buffering video"
+          className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
+        >
+          <div className="w-12 h-12 rounded-full bg-canvas/85 border border-ink/12 flex items-center justify-center">
+            <Loader2 size={22} className="animate-spin text-ink" />
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Buffering Spinner */}
-        {hasRealVideo && isBuffering && !videoError && !userPaused && isInView && (
-          <div
-            aria-label="Buffering video"
-            className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
+      {/* Playback Error + Retry Overlay */}
+      {hasRealVideo && videoError && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-6 text-center bg-canvas/85 pointer-events-auto">
+          <AlertCircle size={28} className="text-danger" aria-hidden="true" />
+          <p className="text-sm font-semibold text-ink">Unable to load this video</p>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            icon={RotateCcw}
+            onClick={handleRetryVideo}
           >
-            <div className="w-12 h-12 rounded-full bg-canvas/85 border border-ink/12 flex items-center justify-center">
-              <Loader2 size={22} className="animate-spin text-ink" />
-            </div>
-          </div>
-        )}
+            Try again
+          </Button>
+        </div>
+      )}
 
-        {/* Playback Error + Retry Overlay */}
-        {hasRealVideo && videoError && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-6 text-center bg-canvas/85 pointer-events-auto">
-            <AlertCircle size={28} className="text-danger" aria-hidden="true" />
-            <p className="text-sm font-semibold text-ink">Unable to load this video</p>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              icon={RotateCcw}
-              onClick={handleRetryVideo}
-            >
-              Try again
-            </Button>
-          </div>
-        )}
-
-        {/* Paused Overlay: ONLY one translucent centered Play button, zero grey veil/wash */}
-        {/* Paused Overlay Cluster: Mute stacked cleanly above centered Play (no circles, no tint) */}
+      {/* Phone/Tablet Only: Paused Overlay Cluster with Mute stacked above Play */}
+      {!isDesktop && (
         <AnimatePresence>
           {hasRealVideo && !videoError && !isPlaying && !isBuffering && (
             <motion.div
@@ -566,8 +599,10 @@ export function ReelCard({
             </motion.div>
           )}
         </AnimatePresence>
+      )}
 
-        {/* Double-tap Floating Heart */}
+      {/* Phone/Tablet Only: Double-tap Floating Heart */}
+      {!isDesktop && (
         <AnimatePresence>
           {showHeartPop && !shouldReduceMotion && (
             <motion.div
@@ -581,7 +616,351 @@ export function ReelCard({
             </motion.div>
           )}
         </AnimatePresence>
+      )}
+
+      {/* Desktop Only (F1a): Single Bottom-Right Translucent Dark Mute Chip */}
+      {isDesktop && (
+        <button
+          type="button"
+          data-testid="reel-desktop-mute"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleMute();
+          }}
+          aria-pressed={!isMuted}
+          aria-label={isMuted ? 'Unmute reel audio' : 'Mute reel audio'}
+          className="quad-reel-desktop-mute-btn pointer-events-auto"
+        >
+          <div className="quad-reel-desktop-mute-chip">
+            {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </div>
+        </button>
+      )}
+    </div>
+  );
+
+  const renderAuthorBlock = (isDesktop: boolean) => (
+    <div className={isDesktop ? 'space-y-3 w-full' : 'space-y-2 flex-1 min-w-0 mb-1'}>
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <button
+            type="button"
+            onClick={handleOpenAuthorProfile}
+            aria-label={`View @${reel.username}'s profile`}
+            className="shrink-0 rounded-full cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <Avatar initials={reel.initials} size={isDesktop ? 36 : 40} />
+          </button>
+          <div className="min-w-0">
+            <button
+              type="button"
+              onClick={handleOpenAuthorProfile}
+              className={`block max-w-full text-left text-sm font-semibold tracking-tight truncate hover:underline cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                isDesktop ? 'text-ink' : 'quad-reel-overlay-text'
+              }`}
+            >
+              @{reel.username}
+            </button>
+            <p
+              className={`text-xs truncate ${
+                isDesktop ? 'text-ink/60' : 'quad-reel-overlay-text-muted'
+              }`}
+            >
+              {reel.branch && reel.year
+                ? `${reel.branch} • ${reel.year} Year`
+                : 'Campus Member'}
+            </p>
+          </div>
+        </div>
+
+        {isDesktop && !isOwnReel && (
+          <button
+            type="button"
+            disabled={isFollowing || isRequested}
+            onClick={handleFollow}
+            aria-pressed={isFollowing || isRequested}
+            className={`min-h-[32px] px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 transition-colors duration-150 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default ${
+              isFollowing || isRequested
+                ? 'bg-canvas text-ink/70 border border-ink/12'
+                : 'bg-ink/8 hover:bg-ink/12 text-ink'
+            }`}
+          >
+            {(isFollowing || isRequested) && <Check size={12} className="text-ink shrink-0" />}
+            <span>{isFollowing ? 'Following' : isRequested ? 'Requested' : 'Follow'}</span>
+          </button>
+        )}
       </div>
+
+      {(reel.caption || extraHashtags.length > 0) && (
+        <div
+          className={`text-xs leading-relaxed break-words ${
+            isDesktop ? 'text-ink' : 'quad-reel-overlay-text'
+          }`}
+        >
+          <p className={isDesktop && !captionExpanded ? 'line-clamp-2' : isDesktop ? '' : 'line-clamp-3'}>
+            {reel.caption}
+            {!isDesktop && extraHashtags.length > 0 && (
+              <span className="ml-1 font-semibold">
+                {extraHashtags.map((t) => `#${t}`).join(' ')}
+              </span>
+            )}
+          </p>
+          {isDesktop && reel.caption && reel.caption.length > 90 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setCaptionExpanded((prev) => !prev);
+              }}
+              className="text-xs font-semibold text-ink/70 hover:text-ink hover:underline mt-1 cursor-pointer"
+            >
+              {captionExpanded ? 'less' : 'more'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {isDesktop && extraHashtags.length > 0 && (
+        <div className="text-xs text-ink/60 font-medium flex flex-wrap gap-1">
+          {extraHashtags.map((t) => (
+            <span key={t}>#{t}</span>
+          ))}
+        </div>
+      )}
+
+      <div
+        className={`inline-flex items-center gap-2 text-xs max-w-full ${
+          isDesktop ? 'text-ink/70' : 'quad-reel-overlay-text-muted'
+        }`}
+      >
+        <Music size={14} className="shrink-0" aria-hidden="true" />
+        <span className="truncate">Original Audio</span>
+      </div>
+    </div>
+  );
+
+  if (isDesktopReel) {
+    return (
+      <div
+        ref={slideRef}
+        data-reel-id={reel.id}
+        onContextMenu={(e) => e.preventDefault()}
+        className={`quad-reel-desktop-stage ${
+          layoutContext === 'modal' ? 'quad-reel-desktop-stage--modal' : ''
+        } ${isCommentsOpen ? 'quad-reel-desktop-stage--comments-open' : ''}`}
+      >
+        {/* Left Author Block (outside video) */}
+        <div data-testid="reel-desktop-author" className="quad-reel-desktop-author quad-reel-desktop-author--side">
+          {renderAuthorBlock(true)}
+        </div>
+
+        {/* Center Column: Clean 9:16 Video Frame + Attached Progress Strip + Fallback Author */}
+        <div className="quad-reel-desktop-center">
+          {renderVideoStage(true)}
+
+          {/* Attached Thin Progress Strip Directly Under Video Frame */}
+          <div
+            className={`quad-reel-desktop-strip-wrap ${isDraggingSeek ? 'is-dragging' : ''}`}
+            ref={seekTrackRef}
+            role="slider"
+            tabIndex={hasRealVideo && totalSec > 0 ? 0 : -1}
+            aria-label="Seek reel playback position"
+            aria-valuemin={0}
+            aria-valuemax={Math.max(0, Math.round(totalSec))}
+            aria-valuenow={Math.round(currentTimeSec)}
+            aria-valuetext={`${formatPlaybackSeconds(currentTimeSec)}${
+              durationBadgeLabel ? ` of ${durationBadgeLabel}` : ''
+            }`}
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => {
+              if (!hasRealVideo || totalSec <= 0) return;
+              e.stopPropagation();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              setIsDraggingSeek(true);
+              seekFromClientX(e.clientX);
+            }}
+            onPointerMove={(e) => {
+              if (!isDraggingSeek) return;
+              e.stopPropagation();
+              seekFromClientX(e.clientX);
+            }}
+            onPointerUp={(e) => {
+              if (!isDraggingSeek) return;
+              e.stopPropagation();
+              if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              }
+              setIsDraggingSeek(false);
+            }}
+            onPointerCancel={() => setIsDraggingSeek(false)}
+            onKeyDown={(e) => {
+              if (!hasRealVideo || totalSec <= 0) return;
+              if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                e.stopPropagation();
+                seekBy(-5);
+              } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                e.stopPropagation();
+                seekBy(5);
+              } else if (e.key === 'Home') {
+                e.preventDefault();
+                e.stopPropagation();
+                seekToTime(0);
+              } else if (e.key === 'End') {
+                e.preventDefault();
+                e.stopPropagation();
+                seekToTime(totalSec);
+              }
+            }}
+          >
+            <div className="quad-reel-desktop-progress-strip">
+              <div
+                className="h-full bg-accent relative"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            {timeDisplay && (
+              <div className="flex items-center justify-end text-[11px] font-medium text-ink/60 tabular-nums px-1 leading-none">
+                <span>{timeDisplay}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Narrow desktop comments-open fallback: Author Block directly below video */}
+          <div className="quad-reel-desktop-author quad-reel-desktop-author--bottom">
+            {renderAuthorBlock(true)}
+          </div>
+        </div>
+
+        {/* Right Action Column (outside video, normal theme colors, zero circles) */}
+        <div data-testid="reel-desktop-actions" className="quad-reel-desktop-actions">
+          <div className="group relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleLike(reel.id);
+              }}
+              aria-pressed={liked}
+              aria-label={
+                liked
+                  ? `Unlike reel, ${reel.likes + 1} likes`
+                  : `Like reel, ${reel.likes} likes`
+              }
+              className="quad-reel-desktop-action-btn"
+            >
+              <Heart
+                size={24}
+                className={liked ? 'text-coral fill-coral' : ''}
+              />
+              <span className="text-xs font-semibold text-ink tabular-nums leading-none">
+                {liked ? reel.likes + 1 : reel.likes}
+              </span>
+            </button>
+            <span className="quad-reel-desktop-action-tooltip">
+              {liked ? 'Unlike' : 'Like'}
+            </span>
+          </div>
+
+          <div className="group relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenComments(reel);
+              }}
+              aria-label={`View ${reel.comments} comments`}
+              className="quad-reel-desktop-action-btn"
+            >
+              <MessageSquare size={24} />
+              <span className="text-xs font-semibold text-ink tabular-nums leading-none">
+                {reel.comments}
+              </span>
+            </button>
+            <span className="quad-reel-desktop-action-tooltip">Comments</span>
+          </div>
+
+          <div className="group relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onShare(reel);
+              }}
+              aria-label={`Share reel, ${(reel.shares || 0) + shareCountOffset} shares`}
+              className="quad-reel-desktop-action-btn"
+            >
+              <Share2 size={24} />
+              <span className="text-xs font-semibold text-ink tabular-nums leading-none">
+                {(reel.shares || 0) + shareCountOffset}
+              </span>
+            </button>
+            <span className="quad-reel-desktop-action-tooltip">Share</span>
+          </div>
+
+          <div className="group relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSave(reel.id);
+              }}
+              aria-pressed={saved}
+              aria-label={saved ? 'Remove saved reel' : 'Save reel'}
+              className="quad-reel-desktop-action-btn"
+            >
+              <Bookmark size={24} className={saved ? 'fill-current text-ink' : ''} />
+            </button>
+            <span className="quad-reel-desktop-action-tooltip">
+              {saved ? 'Saved' : 'Save'}
+            </span>
+          </div>
+
+          <div className="group relative">
+            <ContentActionMenu
+              kind="reel"
+              reel={reel}
+              isOwn={isOwnReel}
+              align="right"
+              placement="top"
+              iconSize={22}
+              buttonClassName="quad-reel-desktop-action-btn"
+              testId={`reel-more-${reel.id}`}
+            />
+            <span className="quad-reel-desktop-action-tooltip">More</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={slideRef}
+      data-reel-id={reel.id}
+      onContextMenu={(e) => e.preventDefault()}
+      onMouseEnter={() => {
+        setIsPlayerHovered(true);
+        wakeControls();
+      }}
+      onMouseLeave={() => {
+        setIsPlayerHovered(false);
+      }}
+      onMouseMove={wakeControls}
+      onPointerDown={wakeControls}
+      onFocusCapture={() => {
+        setIsFocusWithin(true);
+        wakeControls();
+      }}
+      onBlurCapture={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setIsFocusWithin(false);
+        }
+      }}
+      className="quad-reel-phone-stage h-full max-h-full aspect-[9/16] max-w-full rounded-[16px] bg-canvas border border-ink/12 overflow-hidden relative flex flex-col justify-end p-4 pb-4 select-none text-ink"
+    >
+      {renderVideoStage(false)}
 
       {/* Subtle Bottom Gradient Behind Text Only */}
       <div
@@ -597,55 +976,11 @@ export function ReelCard({
           controlsVisible ? 'opacity-100' : 'opacity-0'
         }`}
       >
-        {/* Bottom-left Author & Caption Block (transparent, clickable @username, Original Audio only) */}
-        <div
-          className={`space-y-2 flex-1 min-w-0 mb-1 ${
-            controlsVisible ? 'pointer-events-auto' : 'pointer-events-none'
-          }`}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <button
-              type="button"
-              onClick={handleOpenAuthorProfile}
-              aria-label={`View @${reel.username}'s profile`}
-              className="shrink-0 rounded-full cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              <Avatar initials={reel.initials} size={40} />
-            </button>
-            <div className="min-w-0">
-              <button
-                type="button"
-                onClick={handleOpenAuthorProfile}
-                className="block max-w-full text-left text-sm font-semibold tracking-tight quad-reel-overlay-text truncate hover:underline cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                @{reel.username}
-              </button>
-              <p className="text-xs quad-reel-overlay-text-muted truncate">
-                {reel.branch && reel.year
-                  ? `${reel.branch} • ${reel.year} Year`
-                  : 'Campus Member'}
-              </p>
-            </div>
-          </div>
-
-          {(reel.caption || extraHashtags.length > 0) && (
-            <p className="text-xs quad-reel-overlay-text leading-relaxed line-clamp-3 break-words">
-              {reel.caption}
-              {extraHashtags.length > 0 && (
-                <span className="ml-1 font-semibold">
-                  {extraHashtags.map((t) => `#${t}`).join(' ')}
-                </span>
-              )}
-            </p>
-          )}
-
-          <div className="inline-flex items-center gap-2 text-xs quad-reel-overlay-text-muted max-w-full">
-            <Music size={14} className="shrink-0" aria-hidden="true" />
-            <span className="truncate">Original Audio</span>
-          </div>
+        <div className={controlsVisible ? 'pointer-events-auto flex-1 min-w-0' : 'pointer-events-none flex-1 min-w-0'}>
+          {renderAuthorBlock(false)}
         </div>
 
-        {/* Right Action Rail (bare transparent white icons, zero circles/fills): Like, Comment, Share, Save */}
+        {/* Right Action Rail (bare transparent white icons, zero circles/fills): Like, Comment, Share, Save, More */}
         <div
           className={`flex flex-col items-center gap-3 shrink-0 pr-1 ${
             controlsVisible ? 'pointer-events-auto' : 'pointer-events-none'
@@ -1057,6 +1392,7 @@ export default function ReelsScreen({
               onOpenProfile={onOpenPeerProfile}
               shareCountOffset={shareCountMap[reel.id] || 0}
               onRegisterControls={registerCardControls}
+              isCommentsOpen={commentsOpen}
             />
           </div>
         ))}

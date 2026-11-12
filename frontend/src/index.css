@@ -566,3 +566,246 @@ html.dark .quad-floating-header--reels > div > div:last-child {
     display: none;
   }
 }
+
+/* ─── Part F: Clean-Video Desktop Layout ─── */
+.quad-reel-desktop-stage {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 16px;
+  height: 100%;
+  max-height: 100%;
+  transition: transform 220ms ease, gap 220ms ease;
+  position: relative;
+  user-select: none;
+}
+
+.quad-reel-desktop-author {
+  width: 280px;
+  max-width: 320px;
+  flex-shrink: 0;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--color-ink, #0f172a);
+}
+
+@media (min-width: 1280px) {
+  .quad-reel-desktop-author {
+    width: 300px;
+  }
+}
+
+.quad-reel-desktop-author--side {
+  display: flex;
+}
+
+.quad-reel-desktop-author--bottom {
+  display: none;
+}
+
+/* When narrow desktop (< 1220px) has comments panel open, author block wraps neatly below video */
+@media (max-width: 1219px) {
+  .quad-reel-desktop-stage--comments-open .quad-reel-desktop-author--side {
+    display: none !important;
+  }
+
+  .quad-reel-desktop-stage--comments-open .quad-reel-desktop-author--bottom {
+    display: flex !important;
+    width: 100%;
+    max-width: 360px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+  }
+}
+
+.quad-reel-desktop-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  max-height: 100%;
+  flex-shrink: 0;
+  justify-content: center;
+}
+
+.quad-reel-desktop-video-frame {
+  position: relative;
+  height: calc(100dvh - 44px);
+  aspect-ratio: 9 / 16;
+  max-height: calc(100dvh - 44px);
+  border-radius: 16px;
+  background-color: #000000;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+html.dark .quad-reel-desktop-video-frame {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Modal variant: bounds height to modal container */
+.quad-reel-desktop-stage--modal .quad-reel-desktop-video-frame {
+  height: calc(68vh - 44px);
+  max-height: 560px;
+}
+
+.quad-reel-desktop-stage--modal .quad-reel-desktop-author {
+  width: 240px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 1219px) {
+  .quad-reel-desktop-stage--modal.quad-reel-desktop-stage--comments-open .quad-reel-desktop-author--side {
+    display: none !important;
+  }
+
+  .quad-reel-desktop-stage--modal.quad-reel-desktop-stage--comments-open .quad-reel-desktop-author--bottom {
+    display: flex !important;
+    width: 100%;
+    max-width: 320px;
+    margin-top: 6px;
+  }
+}
+
+/* F1a Mute Chip (bottom-right 12px inset, ~30px circle, ~50-65% black translucent) */
+.quad-reel-desktop-mute-btn {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  min-width: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 9999px;
+}
+
+.quad-reel-desktop-mute-btn:focus-visible {
+  outline: none;
+}
+
+.quad-reel-desktop-mute-btn:focus-visible .quad-reel-desktop-mute-chip {
+  box-shadow: 0 0 0 2px var(--color-accent, #3b82f6);
+}
+
+.quad-reel-desktop-mute-chip {
+  width: 30px;
+  height: 30px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.68);
+  color: #ffffff;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.88;
+  transition: opacity 140ms ease, transform 140ms ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.quad-reel-desktop-mute-btn:hover .quad-reel-desktop-mute-chip {
+  opacity: 1;
+  transform: scale(1.06);
+}
+
+/* Attached progress strip directly under video */
+.quad-reel-desktop-strip-wrap {
+  width: 100%;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.quad-reel-desktop-progress-strip {
+  width: 100%;
+  height: 5px;
+  background: rgba(15, 23, 42, 0.16);
+  border-radius: 9999px;
+  overflow: hidden;
+  position: relative;
+  transition: height 140ms ease;
+}
+
+html.dark .quad-reel-desktop-progress-strip {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.quad-reel-desktop-strip-wrap:hover .quad-reel-desktop-progress-strip,
+.quad-reel-desktop-strip-wrap.is-dragging .quad-reel-desktop-progress-strip {
+  height: 8px;
+}
+
+/* Action column (right of video, bottom-aligned ~24px from bottom) */
+.quad-reel-desktop-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  flex-shrink: 0;
+}
+
+.quad-reel-desktop-action-btn {
+  min-height: 44px;
+  min-width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--color-ink, #0f172a);
+  cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease;
+  position: relative;
+}
+
+.quad-reel-desktop-action-btn:hover {
+  transform: scale(1.08);
+  opacity: 1;
+}
+
+.quad-reel-desktop-action-btn:focus-visible {
+  outline: 2px solid var(--color-accent, #3b82f6);
+  outline-offset: 2px;
+}
+
+.quad-reel-desktop-action-tooltip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 40;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.group:hover > .quad-reel-desktop-action-tooltip,
+.group:focus-visible > .quad-reel-desktop-action-tooltip {
+  opacity: 1;
+}
