@@ -55,7 +55,7 @@ export function NavigationRail({
   isPinned,
   onTogglePin,
   footer,
-  isReelsPage: _isReelsPage = false,
+  isReelsPage = false,
 }: NavigationRailProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -153,18 +153,22 @@ export function NavigationRail({
   return (
     <aside
       aria-label="Campus navigation"
-      className={`hidden md:block sticky top-0 self-start z-30 transition-all duration-200 ${
+      className={`hidden md:block relative self-start z-30 transition-all duration-200 ${
+        isReelsPage ? 'sticky top-0 quad-aside--reels' : 'sticky top-20'
+      } ${
         isPinned ? 'w-[240px]' : 'w-[72px]'
       }`}
     >
       <div
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        className={`h-[100dvh] flex flex-col justify-between py-4 transition-all duration-200 bg-canvas border-r border-ink/12 select-none ${
+        className={`flex flex-col justify-between py-3 transition-all duration-200 bg-canvas border-r border-ink/12 select-none ${
+          isReelsPage ? 'h-[100dvh]' : 'h-[calc(100dvh-6rem)] max-h-[calc(100dvh-6rem)]'
+        } ${
           isExpanded ? 'w-[240px] px-3' : 'w-[72px] px-2 items-center'
         } ${
           !isPinned && isHovered
-            ? 'absolute top-0 left-0 shadow-float z-40'
+            ? 'absolute top-0 left-0 shadow-float z-40 rounded-[12px]'
             : 'relative'
         }`}
       >
