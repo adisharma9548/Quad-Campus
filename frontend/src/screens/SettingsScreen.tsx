@@ -154,6 +154,53 @@ export default function SettingsScreen({
         message="Privacy by Default: Unlike conventional social networks, your personal space, active status, and location metadata are permanently secured until you explicitly change them."
       />
 
+      {/* ─── 0. APPEARANCE & THEME ─── */}
+      <div className="space-y-2">
+        <p className="text-xs font-bold uppercase tracking-wider text-ink/60 px-1">
+          Appearance &amp; Theme
+        </p>
+        <Card className="p-4 bg-canvas border border-ink/12 rounded-[12px] flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-ink">Interface Theme</p>
+            <p className="text-xs text-ink/60 mt-1">
+              Choose between light mode and high-contrast dark slate
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (dark) toggle();
+              }}
+              aria-pressed={!dark}
+              className={`min-h-[44px] px-3 py-2 rounded-[8px] text-xs font-semibold flex items-center gap-2 border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                !dark
+                  ? 'bg-ink text-canvas border-ink'
+                  : 'bg-canvas text-ink/70 border-ink/12 hover:bg-ink/8'
+              }`}
+            >
+              <Sun size={16} />
+              <span>Light</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!dark) toggle();
+              }}
+              aria-pressed={dark}
+              className={`min-h-[44px] px-3 py-2 rounded-[8px] text-xs font-semibold flex items-center gap-2 border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                dark
+                  ? 'bg-ink text-canvas border-ink'
+                  : 'bg-canvas text-ink/70 border-ink/12 hover:bg-ink/8'
+              }`}
+            >
+              <Moon size={16} />
+              <span>Dark</span>
+            </button>
+          </div>
+        </Card>
+      </div>
+
       {/* ─── 1. PROFILE & DISCOVERY PRIVACY ─── */}
       <div className="space-y-2">
         <p className="text-xs font-bold uppercase tracking-wider text-ink/60 px-1">

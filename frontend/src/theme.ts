@@ -18,12 +18,16 @@ export const COLORS = {
     ink: '#111111',    // ~28%: text, icons, borders, active tab, secondary buttons
     accent: '#0A68CC', // ~8%: primary buttons, links, @mentions, focus rings (5.4:1 on white, WCAG AA)
     danger: '#DC2A25', // ~2%: ONLY report, delete, block, destructive confirms, errors
+    like: '#E11D48',   // semantic like token (rose-600)
+    surface: '#FFFFFF',
   },
   dark: {
-    canvas: '#0B0B0C',
+    canvas: '#101216', // Dark slate background to reduce eye strain
     ink: '#F5F5F5',
     accent: '#4DA6FF',
     danger: '#FF5A52',
+    like: '#F43F5E',   // semantic like token (rose-500)
+    surface: '#161920', // Elevated surface/card background
   },
 };
 

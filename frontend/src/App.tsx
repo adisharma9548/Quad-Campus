@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { ThemeProvider, useTheme } from './context/ThemeContext';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useInstitution } from './context/ConfigContext';
 import { NotificationBell } from './components/NotificationBell';
@@ -33,8 +33,7 @@ import NotFoundPage from './screens/NotFoundPage';
 
 import { QuadLogo } from './components/QuadLogo';
 import { Avatar, Badge, Modal, Spinner } from './components/ui';
-import { SidebarItem } from './components/SidebarItem';
-import { SlimRailNav } from './components/SlimRailNav';
+import { NavigationRail } from './components/NavigationRail';
 import { ThisWeekCard } from './components/ThisWeekCard';
 import { PeerProfileModal } from './components/PeerProfileModal';
 import { CreatePostModal } from './screens/CreatePostScreen';
@@ -57,8 +56,6 @@ import {
   Sparkles,
   GraduationCap,
   UserCheck,
-  Moon,
-  Sun,
   ChevronDown,
   RotateCcw,
   ArrowRight,
@@ -281,7 +278,23 @@ function AppShell() {
   const [requestedPeerIds, setRequestedPeerIds] = useState<Set<string | number>>(() => new Set());
   const [selectedProfilePeer, setSelectedProfilePeer] = useState<PeerUser | null>(null);
   const [reelsControlsVisible, setReelsControlsVisible] = useState(true);
-  const { dark, toggle } = useTheme();
+  const [isSidebarPinned, setIsSidebarPinned] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('quad_sidebar_pinned') === 'true';
+    }
+    return false;
+  });
+
+  const toggleSidebarPin = useCallback(() => {
+    setIsSidebarPinned((prev) => {
+      const next = !prev;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('quad_sidebar_pinned', String(next));
+      }
+      return next;
+    });
+  }, []);
+
   const { state, markReelsSeen, requestFollow } = useApp();
   const showDevSwitcher =
     import.meta.env.DEV &&
@@ -595,18 +608,8 @@ function AppShell() {
             </div>
           )}
 
-          {/* Right Global Actions: Circular theme toggle + Avatar menu + ONE accent Post pill button */}
+          {/* Right Global Actions: Mobile Avatar Menu + Notification Bell + ONE accent Post pill button */}
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={toggle}
-              className="min-h-[44px] min-w-[44px] rounded-full bg-canvas border border-ink/12 text-ink hover:bg-ink/8 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              title="Toggle Light/Dark Theme"
-              aria-label="Toggle Light or Dark Theme"
-            >
-              {dark ? <Sun size={20} /> : <Moon size={20} />}
-            </button>
-
             {!isAuthenticated ? (
               <>
                 <button
@@ -627,7 +630,9 @@ function AppShell() {
             ) : (
               <>
                 <NotificationBell onNavigate={navigate} />
-                <div className="relative">
+
+                {/* Mobile-only avatar menu (desktop uses the sidebar footer) */}
+                <div className="relative md:hidden">
                   <button
                     type="button"
                     onClick={() => setAvatarMenuOpen((prev) => !prev)}
@@ -647,7 +652,7 @@ function AppShell() {
                     <div
                       role="menu"
                       aria-label="Account menu"
-                      className="absolute right-0 mt-2 w-60 bg-canvas rounded-[12px] border border-ink/12 p-3 z-50 space-y-2"
+                      className="absolute right-0 mt-2 w-60 bg-canvas rounded-[12px] border border-ink/12 shadow-float p-3 z-50 space-y-2"
                     >
                       <div className="px-2 pb-2 border-b border-ink/12 space-y-1">
                         <p className="text-sm font-semibold text-ink truncate">
@@ -806,80 +811,25 @@ function AppShell() {
           </main>
         ) : (
           /* Responsive Web App Layout (>=1100px 3-col, or 2-col on Reels without right rail) */
-          <div className={`quad-shell-grid ${currentScreen === 'reels' ? 'quad-shell-grid--reels' : ''}`}>
-            {/* ──── COLUMN 1: LEFT NAVIGATION SIDEBAR (768-1023px icon-only, 1024px+ 240px, Reels 72px slim) ──── */}
-            <aside
-              className={
-                isReelsPage
-                  ? 'hidden md:flex md:flex-col sticky self-start quad-aside--reels'
-                  : 'hidden md:flex md:flex-col w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6'
-              }
-            >
-              {isReelsPage ? (
-                <SlimRailNav
-                  currentScreen={currentScreen}
-                  unseenReelsCount={unseenReelsCount}
-                  followRequestCount={followRequestCount}
-                  onNavigate={navigate}
-                  footer={<QuadLegalFooter onNavigate={navigate} />}
-                />
-              ) : (
-                <>
-              <nav aria-label="Primary campus navigation" className="space-y-1 w-full">
-                <SidebarItem
-                  icon={Compass}
-                  label="Feed"
-                  active={currentScreen === 'feed'}
-                  onClick={() => navigate('feed')}
-                />
-                <SidebarItem
-                  icon={Play}
-                  label="Reels"
-                  active={currentScreen === 'reels'}
-                  badge={unseenReelsCount > 0 ? 'New' : null}
-                  badgeVariant="accent"
-                  onClick={() => navigate('reels')}
-                />
-                <SidebarItem
-                  icon={Search}
-                  label="Directory"
-                  active={currentScreen === 'discover'}
-                  onClick={() => navigate('discover')}
-                />
-                <SidebarItem
-                  icon={MessagesSquare}
-                  label="Threads"
-                  active={currentScreen === 'threads'}
-                  onClick={() => navigate('threads')}
-                />
-                <SidebarItem
-                  icon={UserPlus}
-                  label="Requests"
-                  active={currentScreen === 'requests'}
-                  badge={followRequestCount > 0 ? String(followRequestCount) : null}
-                  badgeVariant="count"
-                  onClick={() => navigate('requests')}
-                />
-                <SidebarItem
-                  icon={Lock}
-                  label="Personal space"
-                  active={currentScreen === 'profile'}
-                  onClick={() => navigate('profile')}
-                />
-
-                <div role="separator" className="my-2 border-t border-ink/12" />
-
-                <SidebarItem
-                  icon={Sliders}
-                  label="Settings"
-                  active={currentScreen === 'settings'}
-                  onClick={() => navigate('settings')}
-                />
-              </nav>
-
-                </>
-              )}
-            </aside>
+          <div
+            style={{ '--sidebar-width': isSidebarPinned ? '240px' : '72px' } as React.CSSProperties}
+            className={`quad-shell-grid ${currentScreen === 'reels' ? 'quad-shell-grid--reels' : ''}`}
+          >
+            {/* ──── COLUMN 1: UNIFIED NAVIGATION RAIL (72px / 240px hover & pin) ──── */}
+            <NavigationRail
+              currentScreen={currentScreen}
+              unseenReelsCount={unseenReelsCount}
+              followRequestCount={followRequestCount}
+              onNavigate={navigate}
+              user={user}
+              state={state}
+              institution={institution}
+              onLogOut={logOut}
+              isPinned={isSidebarPinned}
+              onTogglePin={toggleSidebarPin}
+              footer={<QuadLegalFooter onNavigate={navigate} />}
+              isReelsPage={isReelsPage}
+            />
 
             {/* ──── COLUMN 2: CENTER FLEXIBLE COLUMN ──── */}
             <main className={isReelsPage ? 'min-w-0 w-full quad-main--reels' : 'min-w-0 w-full pb-12 mb-8 md:pb-6 md:mb-0'}>
