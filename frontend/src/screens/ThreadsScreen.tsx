@@ -13,12 +13,15 @@ import { useToast } from '../context/ToastContext';
 import { Avatar, PrivacyBadge, Card, Button, EmptyState } from '../components/ui';
 import ThreadCommentNode from '../components/ThreadCommentNode';
 import ReportModal from '../components/ReportModal';
+import { buildShareUrl, shareContent } from '../utils/shareUrl';
 import type { ThreadReply } from '../types/quad';
 
 export default function ThreadsScreen({
   onNavigate: _onNavigate,
+  targetThreadId,
 }: {
   onNavigate?: (screen: string) => void;
+  targetThreadId?: string | number | null;
 }) {
   const {
     state,
@@ -32,7 +35,20 @@ export default function ThreadsScreen({
     undoThreadCommentReport,
   } = useApp();
   const { showToast } = useToast();
-  const threadPosts = state.threadPosts || [];
+  const threadPosts = useMemo(() => state.threadPosts || [], [state.threadPosts]);
+
+  useEffect(() => {
+    if (!targetThreadId) return;
+    const el = document.getElementById(`thread-${targetThreadId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('ring-2', 'ring-accent', 'transition-all');
+      const timer = setTimeout(() => {
+        el.classList.remove('ring-2', 'ring-accent');
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [targetThreadId, threadPosts]);
   const [newThreadText, setNewThreadText] = useState('');
   const [activeReplyPostId, setActiveReplyPostId] = useState<string | number | null>(null);
   const [replyText, setReplyText] = useState('');
@@ -224,6 +240,7 @@ export default function ThreadsScreen({
             return (
               <Card
                 key={post.id}
+                id={`thread-${post.id}`}
                 className="p-4 sm:p-6 bg-canvas border border-ink/12 rounded-[16px] space-y-4 hover:border-ink/24 transition-colors"
               >
                 {/* Parent Post Header */}
@@ -290,7 +307,15 @@ export default function ThreadsScreen({
                   <button
                     type="button"
                     aria-label="Share thread link"
-                    onClick={() => showToast('Thread link copied to clipboard', 'success')}
+                    onClick={() => {
+                      const url = buildShareUrl({ type: 'thread', id: post.id });
+                      shareContent({
+                        title: 'Campus Discussion on Quad',
+                        text: post.content,
+                        url,
+                        onToast: (msg, variant) => showToast(msg, variant || 'success'),
+                      });
+                    }}
                     className="min-h-[44px] min-w-[44px] p-2 rounded-[8px] flex items-center justify-center hover:text-ink hover:bg-ink/4 transition-colors cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <Share2 size={16} />

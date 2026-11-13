@@ -499,6 +499,7 @@ export interface CardProps {
   elevated?: boolean;
   disabled?: boolean;
   variant?: string;
+  id?: string;
 }
 
 export function Card({
@@ -508,11 +509,13 @@ export function Card({
   padding = true,
   elevated = false,
   disabled = false,
+  id,
 }: CardProps) {
   const isInteractive = Boolean(onClick) && !disabled;
 
   return (
     <div
+      id={id}
       onClick={isInteractive ? onClick : undefined}
       tabIndex={isInteractive ? 0 : undefined}
       onKeyDown={

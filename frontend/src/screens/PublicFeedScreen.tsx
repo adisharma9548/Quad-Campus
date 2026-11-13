@@ -35,6 +35,7 @@ import { PostCard, PostCardSkeleton } from '../components/PostCard';
 import { ReelStrip } from '../components/ReelStrip';
 import { ThisWeekCard } from '../components/ThisWeekCard';
 import ReportModal from '../components/ReportModal';
+import { buildShareUrl, shareContent } from '../utils/shareUrl';
 
 const PRIVACY_BANNER_STORAGE_KEY = 'quad_feed_privacy_banner_dismissed';
 
@@ -44,6 +45,8 @@ export interface PublicFeedScreenProps {
   isLoading?: boolean;
   hasError?: boolean;
   onRetry?: () => void;
+  targetPostId?: string | number | null;
+  initialTab?: string | null;
 }
 
 export default function PublicFeedScreen({
@@ -52,6 +55,8 @@ export default function PublicFeedScreen({
   isLoading: propLoading = false,
   hasError = false,
   onRetry,
+  targetPostId,
+  initialTab,
 }: PublicFeedScreenProps) {
   const {
     state,
@@ -75,7 +80,26 @@ export default function PublicFeedScreen({
   const [confirmReportPost, setConfirmReportPost] = useState<import('../types/quad').PostItem | null>(null);
   const [commentPostId, setCommentPostId] = useState<string | number | null>(null);
   const [commentInput, setCommentInput] = useState('');
-  const [feedFilter, setFeedFilter] = useState<'all' | 'branch' | 'year'>('all');
+  const [feedFilter, setFeedFilter] = useState<'all' | 'branch' | 'year'>(() => {
+    if (initialTab === 'department' || initialTab === 'branch') return 'branch';
+    if (initialTab === 'batch' || initialTab === 'year') return 'year';
+    return 'all';
+  });
+
+  useEffect(() => {
+    if (!targetPostId) return;
+    const scrollTimer = setTimeout(() => {
+      const el = document.getElementById(`post-${targetPostId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-accent');
+        setTimeout(() => {
+          el.classList.remove('ring-2', 'ring-accent');
+        }, 2500);
+      }
+    }, 200);
+    return () => clearTimeout(scrollTimer);
+  }, [targetPostId, state.publicPosts]);
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [actionDone, setActionDone] = useState<string | null>(null);
   const [localSavedIds, setLocalSavedIds] = useState<Set<string | number>>(() => new Set());
@@ -252,25 +276,18 @@ export default function PublicFeedScreen({
 
   const handleCopyLink = (post: import('../types/quad').PostItem | null) => {
     if (!post) return;
-    // Quad is a single-page app without per-post URLs yet, so we share the post text instead of a
-    // link that would not open the post.
+    const url = buildShareUrl({ type: 'post', id: post.id });
     const headline = post.title || '';
-    const tags = Array.isArray(post.hashtags) ? post.hashtags.join(' ') : '';
-    const text = [headline, post.content, tags, `Posted by @${post.username} on Quad`]
-      .filter(Boolean)
-      .join('\n\n');
-    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-      navigator.share({ text }).catch(() => {});
-      return;
-    }
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard
-        .writeText(text)
-        .then(() => showToast('Post text copied to clipboard', 'success'))
-        .catch(() => showToast('Could not copy. Select the text and copy it manually.', 'error'));
-      return;
-    }
-    showToast('Sharing is not supported on this device', 'error');
+    const text = headline
+      ? `${headline}\n\nPosted by @${post.username} on Quad`
+      : `Post by @${post.username} on Quad`;
+
+    shareContent({
+      title: headline || `Post by @${post.username}`,
+      text,
+      url,
+      onToast: (msg, variant) => showToast(msg, variant || 'success'),
+    });
   };
 
   const handleHidePost = async (post: import('../types/quad').PostItem | null) => {

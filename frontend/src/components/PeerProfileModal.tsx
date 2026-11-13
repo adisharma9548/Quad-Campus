@@ -14,6 +14,7 @@ import { useApp } from '../context/AppContext';
 import { useToast } from '../context/ToastContext';
 import { IS_REAL_BACKEND, apiRequest, resolveApiMediaUrl } from '../services/apiClient';
 import { resolveReelDurationLabel } from '../utils/formatDuration';
+import { buildShareUrl, shareContent } from '../utils/shareUrl';
 import { ReelCard } from '../screens/ReelsScreen';
 import ReelCommentsPanel from './ReelCommentsPanel';
 import type { PeerProfileData, PeerUser } from '../types/quad';
@@ -404,17 +405,17 @@ export function PeerProfileModal({
                     }}
                     onOpenComments={() => setReelCommentsOpen((prev) => !prev)}
                     onShare={(reel) => {
-                      const shareUrl = `${window.location.origin}/?screen=reels&reel=${encodeURIComponent(
-                        String(reel.id)
-                      )}`;
-                      if (navigator.clipboard?.writeText) {
-                        navigator.clipboard.writeText(shareUrl).catch(() => {});
-                      }
+                      const url = buildShareUrl({ type: 'reel', id: reel.id });
+                      shareContent({
+                        title: `Reel by @${reel.username} on Quad`,
+                        text: reel.caption || undefined,
+                        url,
+                        onToast: (msg, variant) => showToast(msg, variant || 'success'),
+                      });
                       setShareOffsets((prev) => ({
                         ...prev,
                         [String(reel.id)]: (prev[String(reel.id)] || 0) + 1,
                       }));
-                      showToast(`Copied link to @${reel.username}'s reel`, 'success');
                     }}
                     shareCountOffset={shareOffsets[String(viewingReel.id)] || 0}
                     layoutContext="modal"

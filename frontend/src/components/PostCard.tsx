@@ -122,6 +122,7 @@ export function PostCard({
 
   return (
     <Card
+      id={`post-${post.id}`}
       padding={false}
       className="p-4 bg-canvas border border-ink/12 rounded-[12px] hover:border-ink/24 transition-colors duration-150 space-y-3"
     >

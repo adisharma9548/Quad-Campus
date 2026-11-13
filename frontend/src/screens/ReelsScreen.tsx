@@ -20,6 +20,7 @@ import { useIsDesktopReel } from '../hooks/useIsDesktopReel';
 import ContentActionMenu from '../components/ContentActionMenu';
 import { useToast } from '../context/ToastContext';
 import { resolveApiMediaUrl } from '../services/apiClient';
+import { buildShareUrl, shareContent } from '../utils/shareUrl';
 import {
   formatPlaybackSeconds,
   formatTotalSeconds,
@@ -1193,18 +1194,24 @@ function readInitialSessionMute(): boolean {
 export default function ReelsScreen({
   onNavigate: _onNavigate,
   onOpenPeerProfile,
+  initialReelId,
 }: {
   onNavigate?: (screen: string) => void;
   onOpenPeerProfile?: (username: string, fallbackPeer?: import('../types/quad').PeerUser) => void;
+  initialReelId?: string | number | null;
 }) {
   const { state, markReelsSeen, toggleReelLike } = useApp();
   const { showToast } = useToast();
   const shouldReduceMotion = useReducedMotion();
   const reels = useMemo(() => state.reels || [], [state.reels]);
 
-  const [visibleReelId, setVisibleReelId] = useState<string | number | null>(
-    reels[0]?.id ?? null
-  );
+  const [visibleReelId, setVisibleReelId] = useState<string | number | null>(() => {
+    if (initialReelId) {
+      const match = (state.reels || []).find((r) => String(r.id) === String(initialReelId));
+      if (match) return match.id;
+    }
+    return (state.reels || [])[0]?.id ?? null;
+  });
   const [isPageVisible, setIsPageVisible] = useState(true);
   const [isMuted, setIsMuted] = useState<boolean>(readInitialSessionMute);
   const [savedMap, setSavedMap] = useState<Record<string | number, boolean>>({});
@@ -1345,6 +1352,18 @@ export default function ReelsScreen({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeReelId, reels, scrollToIndex]);
 
+  // Deep link initial scroll
+  useEffect(() => {
+    if (!initialReelId || reels.length === 0) return;
+    const targetIdx = reels.findIndex((r) => String(r.id) === String(initialReelId));
+    if (targetIdx >= 0) {
+      const scrollTimer = setTimeout(() => {
+        scrollToIndex(targetIdx);
+      }, 100);
+      return () => clearTimeout(scrollTimer);
+    }
+  }, [initialReelId, reels, scrollToIndex]);
+
   const toggleLike = async (id: string | number) => {
     await toggleReelLike(id);
   };
@@ -1354,11 +1373,14 @@ export default function ReelsScreen({
   };
 
   const handleShare = (reel: import('../types/quad').ReelItem) => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(window.location.href).catch(() => {});
-    }
+    const url = buildShareUrl({ type: 'reel', id: reel.id });
+    shareContent({
+      title: `Reel by @${reel.username} on Quad`,
+      text: reel.caption || undefined,
+      url,
+      onToast: (msg, variant) => showToast(msg, variant || 'success'),
+    });
     setShareCountMap((prev) => ({ ...prev, [reel.id]: (prev[reel.id] || 0) + 1 }));
-    showToast(`Copied link to @${reel.username}'s reel`, 'success');
   };
 
   if (reels.length === 0) {

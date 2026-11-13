@@ -38,6 +38,7 @@ import { ThisWeekCard } from './components/ThisWeekCard';
 import { PeerProfileModal } from './components/PeerProfileModal';
 import { CreatePostModal } from './screens/CreatePostScreen';
 import CreateReelModal from './components/CreateReelModal';
+import { parseLocation, buildShareUrl } from './utils/shareUrl';
 
 import {
   Compass,
@@ -72,12 +73,26 @@ import {
 import type { PeerUser, ThisWeekEvent } from './types/quad';
 
 interface ScreenComponentProps {
-  onNavigate: (screen: string) => void;
+  onNavigate: (
+    screen: string,
+    params?: {
+      reel?: string | number;
+      post?: string | number;
+      user?: string;
+      thread?: string | number;
+      tab?: string;
+      q?: string;
+    }
+  ) => void;
   onNext: (screen?: string) => void;
   onBack: () => void;
   onViewWeekItem?: (item: ThisWeekEvent) => void;
   onOpenCreateReel?: () => void;
   onOpenPeerProfile?: (username: string, fallbackPeer?: PeerUser) => void;
+  initialReelId?: string | number | null;
+  targetPostId?: string | number | null;
+  targetThreadId?: string | number | null;
+  initialTab?: string | null;
 }
 
 interface ScreenConfig {
@@ -250,23 +265,19 @@ const AUTH_GUEST_SCREENS = ['welcome', 'signup', 'login', 'forgot_password'];
 function AppShell() {
   const { user, isAuthenticated, isLoading, logOut } = useAuth();
   const institution = useInstitution();
+  const initialRoute = useMemo(() => parseLocation(), []);
   const [currentPath, setCurrentPath] = useState(() => {
     if (typeof window !== 'undefined') {
       return window.location.pathname;
     }
     return '/';
   });
-  const [currentScreen, setCurrentScreen] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const normalized =
-        window.location.pathname.length > 1
-          ? window.location.pathname.replace(/\/+$/, '')
-          : window.location.pathname;
-      if (normalized === '/terms' || normalized === '/privacy') return 'terms';
-      if (normalized === '/safety') return 'safety';
-    }
-    return 'welcome';
-  });
+  const [currentScreen, setCurrentScreen] = useState(() => initialRoute.screen || 'welcome');
+  const [deepLinkReelId, setDeepLinkReelId] = useState<string | null>(initialRoute.reelId || null);
+  const [deepLinkPostId, setDeepLinkPostId] = useState<string | null>(initialRoute.postId || null);
+  const [deepLinkThreadId, setDeepLinkThreadId] = useState<string | null>(initialRoute.threadId || null);
+  const [_deepLinkUsername, setDeepLinkUsername] = useState<string | null>(initialRoute.username || null);
+  const [deepLinkTab, setDeepLinkTab] = useState<string | null>(initialRoute.tab || null);
   const [_history, setHistory] = useState<string[]>(['welcome']);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
@@ -331,10 +342,29 @@ function AppShell() {
   useEffect(() => {
     const handlePopState = () => {
       setCurrentPath(window.location.pathname);
+      const parsed = parseLocation();
+      setCurrentScreen(parsed.screen);
+      setDeepLinkReelId(parsed.reelId || null);
+      setDeepLinkPostId(parsed.postId || null);
+      setDeepLinkThreadId(parsed.threadId || null);
+      setDeepLinkUsername(parsed.username || null);
+      setDeepLinkTab(parsed.tab || null);
+
+      if (parsed.username && parsed.username !== currentUsername) {
+        setSelectedProfilePeer({
+          id: parsed.username,
+          username: parsed.username,
+          initials: parsed.username.slice(0, 2).toUpperCase(),
+          branch: null,
+          year: null,
+        });
+      } else if (!parsed.username) {
+        setSelectedProfilePeer(null);
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [currentUsername]);
 
   // Sync Reels mobile tabbar visibility with Reels player controls
   useEffect(() => {
@@ -368,7 +398,17 @@ function AppShell() {
     }
   }, [isAuthenticated, isLoading, currentScreen]);
 
-  const navigate = (screen: string) => {
+  const navigate = (
+    screen: string,
+    params?: {
+      reel?: string | number;
+      post?: string | number;
+      user?: string;
+      thread?: string | number;
+      tab?: string;
+      q?: string;
+    }
+  ) => {
     if (screen === 'create') {
       setIsCreateModalOpen(true);
       setSwitcherOpen(false);
@@ -378,13 +418,45 @@ function AppShell() {
     if (screen === 'reels') {
       markReelsSeen();
     }
-    if (
-      screen !== 'terms' &&
-      screen !== 'safety' &&
-      (currentPath === '/terms' || currentPath === '/privacy' || currentPath === '/safety')
-    ) {
-      navigateToPath('/');
+
+    setDeepLinkReelId(params?.reel ? String(params.reel) : null);
+    setDeepLinkPostId(params?.post ? String(params.post) : null);
+    setDeepLinkThreadId(params?.thread ? String(params.thread) : null);
+    setDeepLinkTab(params?.tab || null);
+    setDeepLinkUsername(params?.user || null);
+
+    if (params?.user && params.user !== currentUsername) {
+      setSelectedProfilePeer({
+        id: params.user,
+        username: params.user,
+        initials: params.user.slice(0, 2).toUpperCase(),
+        branch: null,
+        year: null,
+      });
     }
+
+    const newUrl = buildShareUrl({
+      screen,
+      type: params?.reel
+        ? 'reel'
+        : params?.post
+        ? 'post'
+        : params?.user
+        ? 'user'
+        : params?.thread
+        ? 'thread'
+        : undefined,
+      id: params?.reel || params?.post || params?.thread,
+      username: params?.user,
+      tab: params?.tab,
+      q: params?.q,
+    });
+
+    if (typeof window !== 'undefined' && window.history) {
+      window.history.pushState({}, '', newUrl);
+      setCurrentPath(window.location.pathname);
+    }
+
     setHistory((prev) => [...prev, screen]);
     setCurrentScreen(screen);
     setSwitcherOpen(false);
@@ -840,7 +912,12 @@ function AppShell() {
                   onBack={goBack}
                   onViewWeekItem={setSelectedWeekItem}
                   onOpenCreateReel={() => setIsCreateReelModalOpen(true)}
-                  onOpenPeerProfile={(targetUsername, fallbackPeer) =>
+                  initialReelId={deepLinkReelId}
+                  targetPostId={deepLinkPostId}
+                  targetThreadId={deepLinkThreadId}
+                  initialTab={deepLinkTab}
+                  onOpenPeerProfile={(targetUsername, fallbackPeer) => {
+                    navigate('profile', { user: targetUsername });
                     setSelectedProfilePeer(
                       fallbackPeer || {
                         id: targetUsername,
@@ -849,8 +926,8 @@ function AppShell() {
                         branch: null,
                         year: null,
                       }
-                    )
-                  }
+                    );
+                  }}
                 />
 
                 {/* Single-place Footer when Right Rail is hidden (<1100px), omitted on Reels */}
@@ -1115,7 +1192,13 @@ function AppShell() {
       <PeerProfileModal
         username={selectedProfilePeer?.username || null}
         fallbackPeer={selectedProfilePeer}
-        onClose={() => setSelectedProfilePeer(null)}
+        onClose={() => {
+          setSelectedProfilePeer(null);
+          setDeepLinkUsername(null);
+          if (typeof window !== 'undefined' && window.history) {
+            window.history.pushState({}, '', buildShareUrl({ screen: currentScreen }));
+          }
+        }}
       />
 
       {/* Global Create Post Modal */}
