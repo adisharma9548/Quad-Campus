@@ -16,7 +16,6 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Avatar, Badge } from './ui';
-import { QuadLogo } from './QuadLogo';
 import type { UserProfile } from '../types/quad';
 import type { AppState } from '../context/AppContext';
 import type { InstitutionConfig } from '../context/ConfigContext';
@@ -169,48 +168,9 @@ export function NavigationRail({
             : 'relative'
         }`}
       >
-        {/* Top Header / Branding & Pin Toggle */}
+        {/* Navigation Route Items */}
         <div className="w-full shrink-0">
-          {isExpanded ? (
-            <div className="flex items-center justify-between pb-3 mb-2 border-b border-ink/12 px-1">
-              <button
-                type="button"
-                onClick={() => onNavigate('feed')}
-                className="flex items-center gap-2 cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                <QuadLogo size={28} />
-                <span className="font-display font-bold text-base tracking-tight text-ink">
-                  Quad
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onTogglePin}
-                title={isPinned ? 'Unpin sidebar (collapse to rail)' : 'Pin sidebar open'}
-                aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar open'}
-                aria-pressed={isPinned}
-                className="p-2 rounded-[8px] text-ink/60 hover:text-ink hover:bg-ink/8 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                {isPinned ? <PinOff size={16} /> : <Pin size={16} />}
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center pb-3 mb-2 border-b border-ink/12">
-              <button
-                type="button"
-                onClick={() => onNavigate('feed')}
-                title="Quad Feed"
-                aria-label="Quad Feed"
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full hover:bg-ink/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent cursor-pointer"
-              >
-                <QuadLogo size={28} />
-              </button>
-            </div>
-          )}
-
-          {/* Navigation Route Items */}
-          <nav aria-label="Main menu" className="space-y-1 w-full mt-1">
+          <nav aria-label="Main menu" className="space-y-1 w-full">
             {navItems.map((item) => {
               const Icon = item.icon;
               const active = currentScreen === item.id;
@@ -404,41 +364,64 @@ export function NavigationRail({
             )}
           </div>
 
-          {/* Legal Info Trigger */}
-          <div className="relative flex flex-col items-center" ref={infoRef}>
+          {/* Rail Controls: Pin Toggle & Legal Info */}
+          <div
+            className={`relative flex items-center ${
+              isExpanded ? 'justify-between px-2' : 'justify-center flex-col gap-1'
+            }`}
+          >
             <button
               type="button"
-              onClick={() => setInfoOpen((prev) => !prev)}
-              aria-label="Legal & app info"
-              aria-expanded={infoOpen}
-              className={`group relative w-12 h-12 min-h-[44px] rounded-full flex items-center justify-center transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                infoOpen ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/8'
-              }`}
+              onClick={onTogglePin}
+              title={isPinned ? 'Unpin sidebar (collapse to rail)' : 'Pin sidebar open'}
+              aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar open'}
+              aria-pressed={isPinned}
+              className="group relative w-10 h-10 min-h-[40px] rounded-full flex items-center justify-center text-ink/60 hover:text-ink hover:bg-ink/8 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <Info size={18} aria-hidden="true" />
+              {isPinned ? <PinOff size={18} /> : <Pin size={18} />}
               <span
                 role="tooltip"
                 className="quad-slim-rail-tooltip px-3 py-1 rounded-[8px] bg-ink text-canvas text-xs font-semibold shadow-sm"
               >
-                Info & Legal
+                {isPinned ? 'Unpin rail' : 'Pin rail open'}
               </span>
             </button>
 
-            {infoOpen && (
-              <div
-                role="dialog"
-                aria-label="Quad legal and version info"
-                onClick={(e) => {
-                  const target = e.target as HTMLElement;
-                  if (target.closest('button, a')) {
-                    setInfoOpen(false);
-                  }
-                }}
-                className="absolute left-full bottom-0 ml-2 p-3 rounded-[12px] bg-canvas border border-ink/12 shadow-float z-50 text-xs text-ink/70 min-w-[200px]"
+            <div className="relative flex flex-col items-center" ref={infoRef}>
+              <button
+                type="button"
+                onClick={() => setInfoOpen((prev) => !prev)}
+                aria-label="Legal & app info"
+                aria-expanded={infoOpen}
+                className={`group relative w-10 h-10 min-h-[40px] rounded-full flex items-center justify-center transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                  infoOpen ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/8'
+                }`}
               >
-                {footer}
-              </div>
-            )}
+                <Info size={18} aria-hidden="true" />
+                <span
+                  role="tooltip"
+                  className="quad-slim-rail-tooltip px-3 py-1 rounded-[8px] bg-ink text-canvas text-xs font-semibold shadow-sm"
+                >
+                  Info & Legal
+                </span>
+              </button>
+
+              {infoOpen && (
+                <div
+                  role="dialog"
+                  aria-label="Quad legal and version info"
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest('button, a')) {
+                      setInfoOpen(false);
+                    }
+                  }}
+                  className="absolute left-full bottom-0 ml-2 p-3 rounded-[12px] bg-canvas border border-ink/12 shadow-float z-50 text-xs text-ink/70 min-w-[200px]"
+                >
+                  {footer}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
