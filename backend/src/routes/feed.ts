@@ -174,6 +174,109 @@ export function loadAllPostsWithStats(db: DatabaseSync, viewerId: string | null)
   });
 }
 
+export function loadSinglePostWithStats(db: DatabaseSync, postId: string, viewerId: string | null): PostItem | null {
+  const row = db
+    .prepare(`
+      SELECT
+        p.*,
+        u.username AS author_username,
+        u.avatar_initials AS author_initials,
+        u.branch AS author_branch,
+        u.year AS author_year,
+        u.discoverable AS author_discoverable,
+        u.status AS author_status,
+        (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
+        (SELECT COUNT(*) FROM post_saves ps WHERE ps.post_id = p.id) AS saves_count,
+        (SELECT COUNT(*) FROM post_answers pa WHERE pa.post_id = p.id) AS answers_count
+      FROM posts p
+      JOIN users u ON u.id = p.author_id
+      WHERE p.id = ? AND p.status != 'deleted'
+    `)
+    .get(postId) as unknown as JoinedPostRow | undefined;
+
+  if (!row) return null;
+
+  let isLiked = false;
+  let isSaved = false;
+  if (viewerId) {
+    const likeRow = db.prepare('SELECT 1 FROM post_likes WHERE post_id = ? AND user_id = ?').get(postId, viewerId);
+    isLiked = Boolean(likeRow);
+    const saveRow = db.prepare('SELECT 1 FROM post_saves WHERE post_id = ? AND user_id = ?').get(postId, viewerId);
+    isSaved = Boolean(saveRow);
+  }
+
+  const answerRows = db
+    .prepare(`
+      SELECT a.*, u.username, u.avatar_initials
+      FROM post_answers a
+      JOIN users u ON u.id = a.author_id
+      WHERE a.post_id = ? AND u.status != 'banned' AND u.status != 'deleted'
+      ORDER BY a.created_at_ms ASC
+    `)
+    .all(postId) as unknown as JoinedAnswerRow[];
+
+  const answers: PostAnswerDto[] = answerRows.map((a) => ({
+    id: a.id,
+    username: a.username,
+    initials: a.avatar_initials,
+    text: a.content,
+    timestamp: formatRelativeTime(a.created_at_ms),
+  }));
+
+  let hashtags: string[] = [];
+  try {
+    hashtags = JSON.parse(row.hashtags_json || '[]');
+  } catch {
+    hashtags = [];
+  }
+
+  const showAcademics = Boolean(row.author_discoverable) || row.author_id === viewerId;
+  const now = Date.now();
+
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    authorStatus: row.author_status,
+    type: row.type,
+    title: row.title,
+    username: row.author_username,
+    authorUsername: row.author_username,
+    initials: row.author_initials,
+    branch: showAcademics ? row.author_branch : null,
+    authorBranch: row.author_branch,
+    year: showAcademics ? SHORT_YEAR(row.author_year) : null,
+    authorYear: SHORT_YEAR(row.author_year),
+    content: row.content,
+    hashtags,
+    space: row.space,
+    audience: row.audience,
+    groupName: row.group_name || '',
+    timestamp: formatRelativeTime(row.created_at_ms, now),
+    createdAtMs: row.created_at_ms,
+    createdAt: row.created_at,
+    edited: Boolean(row.edited_at_ms),
+    editedAtMs: row.edited_at_ms || null,
+    likes: Number(row.likes_count || 0),
+    likesCount: Number(row.likes_count || 0),
+    savesCount: Number(row.saves_count || 0),
+    comments: answers.length,
+    answersCount: answers.length,
+    shares: Number(row.shares_count || 0),
+    sharesCount: Number(row.shares_count || 0),
+    hasImage: Boolean(row.has_image || row.media_id || row.media_key),
+    mediaId: row.media_id || null,
+    mediaUrl: row.media_id ? `/api/v1/media/${row.media_id}` : '',
+    mediaKey: row.media_key || '',
+    location: row.location || '',
+    imageAlt: row.image_alt || '',
+    bestAnswerId: row.best_answer_id || null,
+    isLiked,
+    isSaved,
+    status: row.status,
+    answers,
+  };
+}
+
 export function serializePostForResponse(post: PostItem) {
   const {
     authorId: _aid,
@@ -301,8 +404,7 @@ export function registerFeedRoutes(
       const viewerRow = request.auth?.userRow || null;
       const viewer = viewerRow ? { id: viewerRow.id } : null;
       const relations = getViewerRelations(db, viewer?.id || null);
-      const allPosts = loadAllPostsWithStats(db, viewer?.id || null);
-      const found = allPosts.find((p) => p.id === request.params.id);
+      const found = loadSinglePostWithStats(db, request.params.id, viewer?.id || null);
 
       if (!found || !canViewerSeePost(found, viewer, relations)) {
         return reply.code(404).send({
@@ -426,6 +528,42 @@ export function registerFeedRoutes(
     }
   );
 
+    // ── Record Post View (Decision 11: 30s throttle per user per post) ──
+  app.post<{ Params: { id: string } }>(
+    '/api/v1/posts/:id/view',
+    { preHandler: auth.requireAuth },
+    async (request, reply) => {
+      const viewer = request.auth!.userRow;
+      const relations = getViewerRelations(db, viewer.id);
+      const post = loadSinglePostWithStats(db, request.params.id, viewer.id);
+      if (!post || !canViewerSeePost(post, { id: viewer.id }, relations)) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Post not found.' } });
+      }
+
+      const nowMs = Date.now();
+      const lastView = db
+        .prepare(
+          "SELECT viewed_at_ms FROM view_logs WHERE target_type = 'post' AND target_id = ? AND user_id = ? ORDER BY viewed_at_ms DESC LIMIT 1"
+        )
+        .get(post.id, viewer.id) as { viewed_at_ms: number } | undefined;
+
+      let counted = false;
+      if (!lastView || nowMs - lastView.viewed_at_ms >= 30_000) {
+        const logId = 'vw_' + crypto.randomUUID().slice(0, 10);
+        db.prepare(
+          "INSERT INTO view_logs (id, target_type, target_id, user_id, viewed_at_ms, created_at) VALUES (?, 'post', ?, ?, ?, ?)"
+        ).run(logId, post.id, viewer.id, nowMs, new Date(nowMs).toISOString());
+        counted = true;
+      }
+
+      const viewsCountRow = db
+        .prepare("SELECT COUNT(*) AS count FROM view_logs WHERE target_type = 'post' AND target_id = ?")
+        .get(post.id) as { count: number };
+
+      return { counted, viewsCount: Number(viewsCountRow.count) };
+    }
+  );
+
   // ── 5. Post Interactions: Like / Save / Hide / Answer / Best Answer ────
   app.post<{ Params: { id: string } }>(
     '/api/v1/posts/:id/like',
@@ -433,7 +571,7 @@ export function registerFeedRoutes(
     async (request, reply) => {
       const viewer = request.auth!.userRow;
       const relations = getViewerRelations(db, viewer.id);
-      const post = loadAllPostsWithStats(db, viewer.id).find((p) => p.id === request.params.id);
+      const post = loadSinglePostWithStats(db, request.params.id, viewer.id);
       if (!post || !canViewerSeePost(post, { id: viewer.id }, relations)) {
         return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Post not found.' } });
       }
@@ -466,7 +604,7 @@ export function registerFeedRoutes(
     async (request, reply) => {
       const viewer = request.auth!.userRow;
       const relations = getViewerRelations(db, viewer.id);
-      const post = loadAllPostsWithStats(db, viewer.id).find((p) => p.id === request.params.id);
+      const post = loadSinglePostWithStats(db, request.params.id, viewer.id);
       if (!post || !canViewerSeePost(post, { id: viewer.id }, relations)) {
         return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Post not found.' } });
       }
@@ -510,7 +648,7 @@ export function registerFeedRoutes(
     async (request, reply) => {
       const viewer = request.auth!.userRow;
       const relations = getViewerRelations(db, viewer.id);
-      const post = loadAllPostsWithStats(db, viewer.id).find((p) => p.id === request.params.id);
+      const post = loadSinglePostWithStats(db, request.params.id, viewer.id);
       if (!post || !canViewerSeePost(post, { id: viewer.id }, relations)) {
         return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Post not found.' } });
       }

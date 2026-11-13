@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS posts (
   created_at_ms INTEGER NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id, created_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_space_status ON posts(space, status, created_at_ms DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(author_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
@@ -192,6 +193,8 @@ CREATE TABLE IF NOT EXISTS reels (
   created_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_reels_status_created ON reels(status, created_at_ms DESC);
+
 CREATE TABLE IF NOT EXISTS reel_views (
   reel_id TEXT NOT NULL REFERENCES reels(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -228,6 +231,8 @@ CREATE TABLE IF NOT EXISTS threads (
   created_at_ms INTEGER NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_threads_status_created ON threads(status, created_at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS thread_likes (
   thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
@@ -316,3 +321,15 @@ CREATE TABLE IF NOT EXISTS reel_comment_likes (
 
 CREATE INDEX IF NOT EXISTS idx_reel_comment_likes_comment ON reel_comment_likes(comment_id);
 CREATE INDEX IF NOT EXISTS idx_reel_comment_likes_user ON reel_comment_likes(user_id);
+
+
+CREATE TABLE IF NOT EXISTS view_logs (
+  id TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL CHECK (target_type IN ('reel', 'post', 'thread')),
+  target_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  viewed_at_ms INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_view_logs_throttle ON view_logs(target_type, target_id, user_id, viewed_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_view_logs_target_count ON view_logs(target_type, target_id);

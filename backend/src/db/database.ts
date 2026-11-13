@@ -14,6 +14,7 @@ export function openDatabase(dbPath: string = './data/quad.db'): DatabaseSync {
 
   const db = new DatabaseSync(dbPath);
   const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
+  db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA busy_timeout = 5000;');
   db.exec(schema);
   migrate(db);
@@ -27,6 +28,23 @@ function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
 
 /** Additive, idempotent migrations for databases created by earlier versions. */
 function migrate(db: DatabaseSync): void {
+  // Additive view_logs table & indexes for Phase 1 (B1 & throttle)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS view_logs (
+      id TEXT PRIMARY KEY,
+      target_type TEXT NOT NULL CHECK (target_type IN ('reel', 'post', 'thread')),
+      target_id TEXT NOT NULL,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      viewed_at_ms INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_view_logs_throttle ON view_logs(target_type, target_id, user_id, viewed_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS idx_view_logs_target_count ON view_logs(target_type, target_id);
+    CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id, created_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS idx_reels_status_created ON reels(status, created_at_ms DESC);
+    CREATE INDEX IF NOT EXISTS idx_threads_status_created ON threads(status, created_at_ms DESC);
+  `);
+
   if (!hasColumn(db, 'posts', 'edited_at_ms')) {
     db.exec('ALTER TABLE posts ADD COLUMN edited_at_ms INTEGER');
   }

@@ -173,6 +173,7 @@ export interface AppContextValue {
   ) => Promise<AppReelItem>;
   searchMentionUsers: (query: string) => Promise<PeerUser[]>;
   markReelsSeen: () => Promise<void>;
+  recordReelView: (reelId: string | number) => Promise<void>;
   toggleReelLike: (reelId: string | number) => Promise<{ likes: number; liked: boolean } | null>;
   updateReelCommentCount: (reelId: string | number, nextCount: number) => void;
   markBestAnswer: (postId: string | number, answerId: string) => Promise<void>;
@@ -959,6 +960,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [state.discoverableUsers]
   );
 
+  const recordReelView = useCallback(async (reelId: string | number) => {
+    if (!IS_REAL_BACKEND) return;
+    try {
+      const res = await apiRequest<{ seen: boolean; counted: boolean; viewsCount: number }>(
+        `/reels/${reelId}/view`,
+        { method: 'POST' }
+      );
+      if (res && typeof res.viewsCount === 'number') {
+        setState((prev) => ({
+          ...prev,
+          reels: (prev.reels || []).map((r) =>
+            String(r.id) === String(reelId)
+              ? { ...r, views: String(res.viewsCount), unseen: false }
+              : r
+          ),
+        }));
+      }
+    } catch {
+      // ignore transient view reporting error
+    }
+  }, []);
+
   const markReelsSeen = useCallback(async () => {
     const hasUnseen = (state.reels || []).some((r) => r.unseen);
     if (!hasUnseen) return;
@@ -1622,6 +1645,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         createReel,
         searchMentionUsers,
         markReelsSeen,
+        recordReelView,
         toggleReelLike,
         updateReelCommentCount,
         markBestAnswer,

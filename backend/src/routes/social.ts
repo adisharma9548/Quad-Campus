@@ -134,7 +134,7 @@ export function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): R
             u.status AS author_status,
             (SELECT COUNT(*) FROM reel_likes rl WHERE rl.reel_id = r.id) AS likes_count,
             (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id AND rc.status = 'active') AS comments_count,
-            (SELECT COUNT(*) FROM reel_views rv WHERE rv.reel_id = r.id) AS views_count
+            COALESCE((SELECT COUNT(*) FROM view_logs vl WHERE vl.target_type = 'reel' AND vl.target_id = r.id), 0) AS views_count
           FROM reels r
           JOIN users u ON u.id = r.author_id
           WHERE r.status = 'active'
@@ -154,7 +154,7 @@ export function loadReelsWithStats(db: DatabaseSync, viewerId: string | null): R
             u.status AS author_status,
             (SELECT COUNT(*) FROM reel_likes rl WHERE rl.reel_id = r.id) AS likes_count,
             (SELECT COUNT(*) FROM reel_comments rc WHERE rc.reel_id = r.id AND rc.status = 'active') AS comments_count,
-            (SELECT COUNT(*) FROM reel_views rv WHERE rv.reel_id = r.id) AS views_count
+            COALESCE((SELECT COUNT(*) FROM view_logs vl WHERE vl.target_type = 'reel' AND vl.target_id = r.id), 0) AS views_count
           FROM reels r
           JOIN users u ON u.id = r.author_id
           WHERE r.status = 'active'
@@ -1264,17 +1264,57 @@ export function registerSocialRoutes(
     deleteReelCommentHandler
   );
 
+  const reelViewHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string } }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const reelId = String(request.params.id);
+    const viewer = request.auth!.userRow;
+    const reelRow = db
+      .prepare('SELECT id, author_id, status, audience FROM reels WHERE id = ?')
+      .get(reelId) as { id: string; author_id: string; status: string; audience: string | null } | undefined;
+    if (!reelRow || !canViewerAccessReelMedia(reelRow, viewer)) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+    }
+
+    const nowMs = Date.now();
+    const lastView = db
+      .prepare(
+        "SELECT viewed_at_ms FROM view_logs WHERE target_type = 'reel' AND target_id = ? AND user_id = ? ORDER BY viewed_at_ms DESC LIMIT 1"
+      )
+      .get(reelId, viewer.id) as { viewed_at_ms: number } | undefined;
+
+    let counted = false;
+    if (!lastView || nowMs - lastView.viewed_at_ms >= 30_000) {
+      const logId = 'vw_' + crypto.randomUUID().slice(0, 10);
+      db.prepare(
+        "INSERT INTO view_logs (id, target_type, target_id, user_id, viewed_at_ms, created_at) VALUES (?, 'reel', ?, ?, ?, ?)"
+      ).run(logId, reelId, viewer.id, nowMs, new Date(nowMs).toISOString());
+      counted = true;
+    }
+
+    db.prepare('INSERT OR IGNORE INTO reel_views (reel_id, user_id, viewed_at) VALUES (?, ?, ?)').run(
+      reelId,
+      viewer.id,
+      new Date(nowMs).toISOString()
+    );
+
+    const viewsCountRow = db
+      .prepare("SELECT COUNT(*) AS count FROM view_logs WHERE target_type = 'reel' AND target_id = ?")
+      .get(reelId) as { count: number };
+
+    return { seen: true, counted, viewsCount: Number(viewsCountRow.count) };
+  };
+
   app.post<{ Params: { id: string } }>(
     '/api/v1/reels/:id/view',
     { preHandler: auth.requireAuth },
-    async (request) => {
-      db.prepare('INSERT OR IGNORE INTO reel_views (reel_id, user_id, viewed_at) VALUES (?, ?, ?)').run(
-        String(request.params.id),
-        request.auth!.userRow.id,
-        new Date().toISOString()
-      );
-      return { seen: true };
-    }
+    reelViewHandler
+  );
+  app.post<{ Params: { id: string } }>(
+    '/api/reels/:id/view',
+    { preHandler: auth.requireAuth },
+    reelViewHandler
   );
 
   app.post('/api/v1/reels/mark-all-seen', { preHandler: auth.requireAuth }, async (request) => {
@@ -1290,29 +1330,47 @@ export function registerSocialRoutes(
     return { markedAllSeen: true };
   });
 
+  const reelLikeHandler = async (
+    request: import('fastify').FastifyRequest<{ Params: { id: string } }>,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const reelId = String(request.params.id);
+    const viewer = request.auth!.userRow;
+    const reelRow = db
+      .prepare('SELECT id, author_id, status, audience FROM reels WHERE id = ?')
+      .get(reelId) as { id: string; author_id: string; status: string; audience: string | null } | undefined;
+    if (!reelRow || !canViewerAccessReelMedia(reelRow, viewer)) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Reel not found.' } });
+    }
+
+    const uid = viewer.id;
+    const exists = db
+      .prepare('SELECT 1 FROM reel_likes WHERE reel_id = ? AND user_id = ?')
+      .get(reelId, uid);
+    if (exists) {
+      db.prepare('DELETE FROM reel_likes WHERE reel_id = ? AND user_id = ?').run(reelId, uid);
+    } else {
+      db.prepare('INSERT INTO reel_likes (reel_id, user_id, created_at) VALUES (?, ?, ?)').run(
+        reelId,
+        uid,
+        new Date().toISOString()
+      );
+    }
+    const likesRow = db
+      .prepare('SELECT COUNT(*) AS count FROM reel_likes WHERE reel_id = ?')
+      .get(reelId) as { count: number };
+    return { liked: !exists, likes: Number(likesRow.count) };
+  };
+
   app.post<{ Params: { id: string } }>(
     '/api/v1/reels/:id/like',
     { preHandler: auth.requireAuth },
-    async (request) => {
-      const reelId = String(request.params.id);
-      const uid = request.auth!.userRow.id;
-      const exists = db
-        .prepare('SELECT 1 FROM reel_likes WHERE reel_id = ? AND user_id = ?')
-        .get(reelId, uid);
-      if (exists) {
-        db.prepare('DELETE FROM reel_likes WHERE reel_id = ? AND user_id = ?').run(reelId, uid);
-      } else {
-        db.prepare('INSERT INTO reel_likes (reel_id, user_id, created_at) VALUES (?, ?, ?)').run(
-          reelId,
-          uid,
-          new Date().toISOString()
-        );
-      }
-      const likesRow = db
-        .prepare('SELECT COUNT(*) AS count FROM reel_likes WHERE reel_id = ?')
-        .get(reelId) as { count: number };
-      return { liked: !exists, likes: Number(likesRow.count) };
-    }
+    reelLikeHandler
+  );
+  app.post<{ Params: { id: string } }>(
+    '/api/reels/:id/like',
+    { preHandler: auth.requireAuth },
+    reelLikeHandler
   );
 
   const deleteReelHandler = async (
@@ -1690,9 +1748,28 @@ export function registerSocialRoutes(
   app.post<{ Params: { id: string } }>(
     '/api/v1/threads/:id/like',
     { preHandler: auth.requireAuth },
-    async (request) => {
+    async (request, reply) => {
       const tid = String(request.params.id);
       const uid = request.auth!.userRow.id;
+      const thread = db
+        .prepare('SELECT id, author_id, status FROM threads WHERE id = ?')
+        .get(tid) as { id: string; author_id: string; status: string } | undefined;
+      if (!thread || thread.status !== 'active') {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
+      }
+
+      const author = db
+        .prepare('SELECT status FROM users WHERE id = ?')
+        .get(thread.author_id) as { status: UserStatus } | undefined;
+      if (!author || author.status === 'banned' || author.status === 'deleted') {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
+      }
+
+      const relations = getViewerRelations(db, uid);
+      if (relations.blockedIds.has(thread.author_id) || relations.blockedByIds.has(thread.author_id)) {
+        return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
+      }
+
       const exists = db
         .prepare('SELECT 1 FROM thread_likes WHERE thread_id = ? AND user_id = ?')
         .get(tid, uid);
@@ -1733,6 +1810,18 @@ export function registerSocialRoutes(
       .prepare("SELECT id, author_id FROM threads WHERE id = ? AND status = 'active'")
       .get(tid) as { id: string; author_id: string } | undefined;
     if (!thread) {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
+    }
+
+    const threadAuthor = db
+      .prepare('SELECT status FROM users WHERE id = ?')
+      .get(thread.author_id) as { status: UserStatus } | undefined;
+    if (!threadAuthor || threadAuthor.status === 'banned' || threadAuthor.status === 'deleted') {
+      return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
+    }
+
+    const relations = getViewerRelations(db, viewer.id);
+    if (relations.blockedIds.has(thread.author_id) || relations.blockedByIds.has(thread.author_id)) {
       return reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'Thread not found.' } });
     }
 

@@ -77,16 +77,12 @@ export function PostCard({
   onShareClick,
 }: PostCardProps) {
   const { dark } = useTheme();
-  const [localLiked, setLocalLiked] = useState(Boolean(post.isLiked));
-  const [localDelta, setLocalDelta] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
-  const liked = onToggleLike ? Boolean(post.isLiked) : localLiked;
-  const likeCount = onToggleLike
-    ? post.likes || 0
-    : Math.max(0, (post.likes || 0) + localDelta);
+  const liked = Boolean(post.isLiked);
+  const likeCount = Math.max(0, post.likes || 0);
 
   const postType = post.type || 'Discussion';
   const isQuestion = postType === 'Question';
@@ -117,11 +113,7 @@ export function PostCard({
   const handleLike = async () => {
     if (onToggleLike) {
       await onToggleLike(post);
-      return;
     }
-    const nextLiked = !localLiked;
-    setLocalLiked(nextLiked);
-    setLocalDelta((prev) => prev + (nextLiked ? 1 : -1));
   };
 
   const commentCount = Array.isArray(post.answers)

@@ -77,7 +77,7 @@ export function ReelCard({
   layoutContext = 'page',
   isCommentsOpen = false,
 }: ReelCardProps) {
-  const { state, requestFollow } = useApp();
+  const { state, requestFollow, recordReelView } = useApp();
   const isDesktopReel = useIsDesktopReel();
   const isOwnReel = Boolean(
     state.username && reel.username && state.username.toLowerCase() === reel.username.toLowerCase()
@@ -107,6 +107,29 @@ export function ReelCard({
   const seekTrackRef = useRef<HTMLDivElement | null>(null);
   const hideControlsTimerRef = useRef<number | null>(null);
   const lastTapRef = useRef(0);
+  const isProcessing = reel.status === 'processing';
+  const isFailed = reel.status === 'failed';
+  const hasRealVideo = !isProcessing && !isFailed && Boolean(reel.videoUrl || reel.mediaUrl);
+
+  // Decision 11: Count view after 3s playback or 50% watched, whichever comes first
+  const viewLoggedRef = useRef(false);
+
+  useEffect(() => {
+    viewLoggedRef.current = false;
+  }, [reel.id]);
+
+  useEffect(() => {
+    if (!isInView || viewLoggedRef.current || !hasRealVideo) return;
+    const dur = videoDurationSec || (typeof reel.durationSec === 'number' ? reel.durationSec : 0);
+    const reachedThreshold =
+      currentTimeSec >= 3 || (dur > 0 && currentTimeSec >= dur * 0.5);
+
+    if (reachedThreshold) {
+      viewLoggedRef.current = true;
+      recordReelView?.(reel.id);
+    }
+  }, [isInView, currentTimeSec, videoDurationSec, reel.durationSec, hasRealVideo, reel.id, recordReelView]);
+
 
   const isFollowing =
     reel.followStatus === 'following' ||
@@ -132,9 +155,6 @@ export function ReelCard({
     }
   };
 
-  const isProcessing = reel.status === 'processing';
-  const isFailed = reel.status === 'failed';
-  const hasRealVideo = !isProcessing && !isFailed && Boolean(reel.videoUrl || reel.mediaUrl);
   const resolvedVideoSrc = hasRealVideo
     ? resolveApiMediaUrl(reel.videoUrl || reel.mediaUrl)
     : '';
