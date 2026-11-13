@@ -1200,10 +1200,14 @@ export default function ReelsScreen({
   onOpenPeerProfile?: (username: string, fallbackPeer?: import('../types/quad').PeerUser) => void;
   initialReelId?: string | number | null;
 }) {
-  const { state, markReelsSeen, toggleReelLike } = useApp();
+  const { state, markReelsSeen, toggleReelLike, toggleReelSave } = useApp();
   const { showToast } = useToast();
   const shouldReduceMotion = useReducedMotion();
   const reels = useMemo(() => state.reels || [], [state.reels]);
+  const savedReelIds = useMemo(
+    () => new Set((state.savedReelIds || []).map(String)),
+    [state.savedReelIds]
+  );
 
   const [visibleReelId, setVisibleReelId] = useState<string | number | null>(() => {
     if (initialReelId) {
@@ -1214,7 +1218,6 @@ export default function ReelsScreen({
   });
   const [isPageVisible, setIsPageVisible] = useState(true);
   const [isMuted, setIsMuted] = useState<boolean>(readInitialSessionMute);
-  const [savedMap, setSavedMap] = useState<Record<string | number, boolean>>({});
   const [shareCountMap, setShareCountMap] = useState<Record<string | number, number>>({});
   const [commentsOpen, setCommentsOpen] = useState(false);
 
@@ -1368,8 +1371,16 @@ export default function ReelsScreen({
     await toggleReelLike(id);
   };
 
-  const toggleSave = (id: string | number) => {
-    setSavedMap((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleSave = async (id: string | number) => {
+    try {
+      const res = await toggleReelSave(id);
+      showToast(
+        res?.saved ? 'Reel saved to Personal Space' : 'Removed from Saved',
+        'success'
+      );
+    } catch {
+      showToast('Unable to save reel', 'error');
+    }
   };
 
   const handleShare = (reel: import('../types/quad').ReelItem) => {
@@ -1420,7 +1431,7 @@ export default function ReelsScreen({
               onToggleMute={() => setIsMuted((prev) => !prev)}
               liked={Boolean(reel.isLiked)}
               onToggleLike={toggleLike}
-              saved={Boolean(savedMap[reel.id])}
+              saved={savedReelIds.has(String(reel.id))}
               onToggleSave={toggleSave}
               onOpenComments={(r) => {
                 if (commentsOpen && String(activeReel?.id) === String(r.id)) {

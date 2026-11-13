@@ -25,6 +25,7 @@ import { registerAuthRoutes } from './routes/auth.ts';
 import { registerFeedRoutes } from './routes/feed.ts';
 import { registerSocialRoutes } from './routes/social.ts';
 import { registerAdminRoutes } from './routes/admin.ts';
+import { registerSavedRoutes } from './routes/saved.ts';
 
 export interface BuildAppOptions {
   dbPath?: string;
@@ -139,6 +140,7 @@ export async function buildApp({
     isAppClosing: () => isClosing,
   });
   registerAdminRoutes(app, db, auth);
+  registerSavedRoutes(app, db, auth);
 
   return { app, db, uploadDir: resolvedUploadDir };
 }

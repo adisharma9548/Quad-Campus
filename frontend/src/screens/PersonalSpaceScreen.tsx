@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Lock,
   Globe,
@@ -12,6 +12,7 @@ import {
   Shield,
   FileText,
   Film,
+  Bookmark,
   MoreHorizontal,
   Play,
   Trash2,
@@ -19,12 +20,13 @@ import {
 import { useApp } from '../context/AppContext';
 import { useInstitution } from '../context/ConfigContext';
 import { useToast } from '../context/ToastContext';
-import { resolveApiMediaUrl } from '../services/apiClient';
+import { resolveApiMediaUrl, IS_REAL_BACKEND, apiRequest } from '../services/apiClient';
 import { resolveReelDurationLabel } from '../utils/formatDuration';
 import { buildShareUrl, shareContent } from '../utils/shareUrl';
 import { ReelCard } from './ReelsScreen';
 import ReelCommentsPanel from '../components/ReelCommentsPanel';
-import type { ReelItem } from '../types/quad';
+import { PostCard } from '../components/PostCard';
+import type { ReelItem, PostItem } from '../types/quad';
 import {
   Avatar,
   Badge,
@@ -35,6 +37,25 @@ import {
   Modal,
   EmptyState,
 } from '../components/ui';
+
+interface SavedEntry {
+  id: string;
+  type: 'post' | 'reel' | 'thread';
+  targetId: string;
+  savedAt: string;
+  post?: PostItem;
+  reel?: ReelItem;
+  thread?: {
+    id: string;
+    username: string;
+    initials: string;
+    content: string;
+    timestamp: string;
+    likes: number;
+    isLiked: boolean;
+    repliesCount: number;
+  };
+}
 
 const REEL_MUTE_STORAGE_KEY = 'quad_reels_muted';
 
@@ -47,18 +68,29 @@ export default function PersonalSpaceScreen({
   onOpenCreateReel?: () => void;
   onOpenPeerProfile?: (username: string, fallbackPeer?: import('../types/quad').PeerUser) => void;
 }) {
-  const { state, toggleProfileVisibility, togglePostLike, toggleReelLike, deleteReel } = useApp();
+  const {
+    state,
+    toggleProfileVisibility,
+    togglePostLike,
+    toggleReelLike,
+    togglePostSave,
+    toggleReelSave,
+    toggleThreadSave,
+    deleteReel,
+  } = useApp();
   const institution = useInstitution();
   const { showToast } = useToast();
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [activeGroupFilter, setActiveGroupFilter] = useState('All');
-  const [activeTab, setActiveTab] = useState<'posts' | 'reels'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'reels' | 'saved'>('posts');
+  const [savedFilter, setSavedFilter] = useState<'all' | 'post' | 'reel' | 'thread'>('all');
+  const [savedEntries, setSavedEntries] = useState<SavedEntry[]>([]);
+  const [isLoadingSaved, setIsLoadingSaved] = useState(false);
   const [openReelMenuId, setOpenReelMenuId] = useState<string | null>(null);
   const [deleteConfirmReel, setDeleteConfirmReel] = useState<ReelItem | null>(null);
   const [isDeletingReel, setIsDeletingReel] = useState(false);
   const [viewingReelId, setViewingReelId] = useState<string | number | null>(null);
   const [reelCommentsOpen, setReelCommentsOpen] = useState(false);
-  const [savedReels, setSavedReels] = useState<Record<string, boolean>>({});
   const [shareOffsets, setShareOffsets] = useState<Record<string, number>>({});
   const [isMuted, setIsMuted] = useState<boolean>(() => {
     try {
@@ -77,10 +109,115 @@ export default function PersonalSpaceScreen({
   const myReels = (state.reels || []).filter(
     (r) => r.username === username && r.status !== 'deleted'
   );
+
+  const allAvailableReels = useMemo(() => {
+    const list = [...myReels];
+    for (const item of savedEntries) {
+      if (item.type === 'reel' && item.reel && !list.some((r) => String(r.id) === String(item.reel!.id))) {
+        list.push(item.reel);
+      }
+    }
+    return list;
+  }, [myReels, savedEntries]);
+
   const viewingReel =
     viewingReelId !== null
-      ? myReels.find((r) => String(r.id) === String(viewingReelId)) || null
+      ? allAvailableReels.find((r) => String(r.id) === String(viewingReelId)) || null
       : null;
+
+  const savedReelIds = useMemo(
+    () => new Set((state.savedReelIds || []).map(String)),
+    [state.savedReelIds]
+  );
+
+  const totalSavedCount =
+    (state.savedPostIds?.length || 0) +
+    (state.savedReelIds?.length || 0) +
+    (state.savedThreadIds?.length || 0);
+
+  useEffect(() => {
+    if (activeTab !== 'saved') return;
+    let active = true;
+
+    async function loadSaved() {
+      setIsLoadingSaved(true);
+      try {
+        if (!IS_REAL_BACKEND) {
+          const posts = (state.publicPosts || [])
+            .filter((p) => (state.savedPostIds || []).some((id) => String(id) === String(p.id)))
+            .map((p) => ({
+              id: `save_local_post_${p.id}`,
+              type: 'post' as const,
+              targetId: String(p.id),
+              savedAt: p.timestamp,
+              post: p,
+            }));
+          const reels = (state.reels || [])
+            .filter((r) => (state.savedReelIds || []).some((id) => String(id) === String(r.id)))
+            .map((r) => ({
+              id: `save_local_reel_${r.id}`,
+              type: 'reel' as const,
+              targetId: String(r.id),
+              savedAt: 'Recent',
+              reel: r,
+            }));
+          const threads = (state.threadPosts || [])
+            .filter((t) => (state.savedThreadIds || []).some((id) => String(id) === String(t.id)))
+            .map((t) => ({
+              id: `save_local_thread_${t.id}`,
+              type: 'thread' as const,
+              targetId: String(t.id),
+              savedAt: t.timestamp,
+              thread: {
+                id: String(t.id),
+                username: t.username,
+                initials: t.initials,
+                content: t.content,
+                timestamp: t.timestamp,
+                likes: t.likes || 0,
+                isLiked: Boolean(t.isLiked),
+                repliesCount: t.replyCount || (t.replies?.length || 0),
+              },
+            }));
+          if (active) {
+            setSavedEntries([...posts, ...reels, ...threads]);
+          }
+          return;
+        }
+
+        const endpoint = savedFilter === 'all' ? '/saved' : `/saved?type=${savedFilter}`;
+        const res = await apiRequest<{ items: SavedEntry[] }>(endpoint);
+        if (active) {
+          setSavedEntries(res?.items || []);
+        }
+      } catch (err) {
+        console.warn('Failed to load saved items:', err);
+      } finally {
+        if (active) {
+          setIsLoadingSaved(false);
+        }
+      }
+    }
+
+    void loadSaved();
+    return () => {
+      active = false;
+    };
+  }, [
+    activeTab,
+    savedFilter,
+    state.savedPostIds,
+    state.savedReelIds,
+    state.savedThreadIds,
+    state.publicPosts,
+    state.reels,
+    state.threadPosts,
+  ]);
+
+  const filteredSavedEntries = useMemo(() => {
+    if (savedFilter === 'all') return savedEntries;
+    return savedEntries.filter((item) => item.type === savedFilter);
+  }, [savedEntries, savedFilter]);
 
   const handleToggleMute = () => {
     setIsMuted((prev) => {
@@ -321,9 +458,26 @@ export default function PersonalSpaceScreen({
           <Film size={14} aria-hidden="true" />
           <span>Reels ({myReels.length})</span>
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'saved'}
+          onClick={() => {
+            setActiveTab('saved');
+            setOpenReelMenuId(null);
+          }}
+          className={`min-h-[40px] px-4 py-2 rounded-full text-xs font-semibold transition-all cursor-pointer border inline-flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+            activeTab === 'saved'
+              ? 'bg-ink text-canvas border-ink font-bold'
+              : 'bg-canvas text-ink/70 border-ink/12 hover:bg-ink/6 hover:text-ink'
+          }`}
+        >
+          <Bookmark size={14} aria-hidden="true" />
+          <span>Saved ({totalSavedCount})</span>
+        </button>
       </div>
 
-      {activeTab === 'posts' ? (
+      {activeTab === 'posts' && (
         <>
           {/* Circle Filters */}
           <div className="space-y-3">
@@ -411,7 +565,9 @@ export default function PersonalSpaceScreen({
             </div>
           )}
         </>
-      ) : (
+      )}
+
+      {activeTab === 'reels' && (
         <div className="space-y-4">
           {myReels.length === 0 ? (
             <EmptyState
@@ -540,6 +696,247 @@ export default function PersonalSpaceScreen({
         </div>
       )}
 
+      {activeTab === 'saved' && (
+        <div className="space-y-4">
+          {/* Saved Filter Pills */}
+          <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
+            {(['all', 'post', 'reel', 'thread'] as const).map((filterKey) => {
+              const labels: Record<string, string> = {
+                all: 'All',
+                post: 'Posts',
+                reel: 'Reels',
+                thread: 'Threads',
+              };
+              const counts: Record<string, number> = {
+                all: totalSavedCount,
+                post: state.savedPostIds?.length || 0,
+                reel: state.savedReelIds?.length || 0,
+                thread: state.savedThreadIds?.length || 0,
+              };
+              const isSelected = savedFilter === filterKey;
+              return (
+                <button
+                  key={filterKey}
+                  type="button"
+                  onClick={() => setSavedFilter(filterKey)}
+                  className={`min-h-[44px] px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer border active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                    isSelected
+                      ? 'bg-ink text-canvas border-ink font-bold'
+                      : 'bg-canvas text-ink/60 border-ink/12 hover:bg-ink/8 hover:text-ink'
+                  }`}
+                >
+                  {labels[filterKey]} ({counts[filterKey]})
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Saved Stream */}
+          {isLoadingSaved ? (
+            <div className="space-y-4">
+              {[1, 2, 3].map((n) => (
+                <Card
+                  key={n}
+                  className="p-4 sm:p-6 bg-canvas border border-ink/12 rounded-[16px] animate-pulse"
+                >
+                  <div className="h-4 bg-ink/8 rounded-[8px] w-1/3 mb-3" />
+                  <div className="h-16 bg-ink/6 rounded-[8px] mb-3" />
+                  <div className="h-4 bg-ink/8 rounded-[8px] w-1/4" />
+                </Card>
+              ))}
+            </div>
+          ) : filteredSavedEntries.length === 0 ? (
+            <EmptyState
+              icon={Bookmark}
+              title="No Saved Content"
+              description={
+                savedFilter === 'all'
+                  ? 'Bookmark campus posts, reels, or discussions across Quad to reference them quickly here.'
+                  : `You have no saved ${savedFilter === 'post' ? 'posts' : savedFilter === 'reel' ? 'reels' : 'threads'}.`
+              }
+              action={
+                <Button variant="secondary" size="sm" onClick={() => onNavigate('feed')}>
+                  Explore Campus Feed
+                </Button>
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              {filteredSavedEntries.map((item) => {
+                if (item.type === 'post' && item.post) {
+                  return (
+                    <PostCard
+                      key={item.id}
+                      post={item.post}
+                      onToggleLike={(p) => void togglePostLike(p.id)}
+                      onToggleSave={(p) => void togglePostSave(p.id)}
+                      onCommentClick={(p) => {
+                        onNavigate(`feed?post=${p.id}`);
+                      }}
+                    />
+                  );
+                }
+
+                if (item.type === 'reel' && item.reel) {
+                  const reel = item.reel;
+                  const thumbSrc = resolveApiMediaUrl(reel.coverUrl || reel.thumbnailUrl);
+                  const durationLabel = resolveReelDurationLabel(reel);
+                  return (
+                    <Card
+                      key={item.id}
+                      className="p-3 sm:p-4 bg-canvas border border-ink/12 rounded-[16px] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 hover:border-ink/24 transition-colors"
+                    >
+                      <div
+                        className="flex items-center gap-3 min-w-0 cursor-pointer flex-1"
+                        onClick={() => {
+                          setViewingReelId(reel.id);
+                        }}
+                      >
+                        <div className="relative w-20 h-28 sm:w-24 sm:h-32 rounded-[8px] bg-ink/6 overflow-hidden shrink-0 border border-ink/12">
+                          {thumbSrc ? (
+                            <img
+                              src={thumbSrc}
+                              alt={reel.caption || 'Reel thumbnail'}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-ink/8">
+                              <Film size={24} className="text-ink/40" />
+                            </div>
+                          )}
+                          <div className="absolute inset-0 bg-ink/40 flex items-center justify-center">
+                            <div className="w-8 h-8 rounded-full bg-ink/80 text-canvas flex items-center justify-center">
+                              <Play size={16} className="fill-canvas translate-x-0.5" />
+                            </div>
+                          </div>
+                          <span className="absolute bottom-1 right-1 px-2 py-1 rounded-[8px] text-[10px] font-semibold bg-ink/80 text-canvas">
+                            {durationLabel}
+                          </span>
+                        </div>
+
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-ink">@{reel.username}</span>
+                            <span className="text-xs text-ink/60">• {reel.tag}</span>
+                          </div>
+                          <p className="text-sm text-ink line-clamp-2 leading-relaxed">
+                            {reel.caption || 'Campus Reel demo'}
+                          </p>
+                          <div className="flex items-center gap-3 text-xs text-ink/60 pt-1">
+                            <span className="inline-flex items-center gap-1">
+                              <Heart
+                                size={14}
+                                className={reel.isLiked ? 'fill-ink text-ink' : ''}
+                              />{' '}
+                              {reel.likes || 0}
+                            </span>
+                            <span className="inline-flex items-center gap-1">
+                              <Eye size={14} /> {reel.views || 0}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={Bookmark}
+                          onClick={async () => {
+                            try {
+                              await toggleReelSave(reel.id);
+                              showToast('Removed from Saved', 'info');
+                              setSavedEntries((prev) => prev.filter((e) => e.id !== item.id));
+                            } catch {
+                              showToast('Unable to update bookmark', 'error');
+                            }
+                          }}
+                          aria-label="Remove saved reel"
+                        >
+                          Saved
+                        </Button>
+                      </div>
+                    </Card>
+                  );
+                }
+
+                if (item.type === 'thread' && item.thread) {
+                  const thread = item.thread;
+                  return (
+                    <Card
+                      key={item.id}
+                      className="p-4 sm:p-6 bg-canvas border border-ink/12 rounded-[16px] space-y-3 hover:border-ink/24 transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Avatar initials={thread.initials} size="sm" />
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold text-ink">
+                                @{thread.username}
+                              </span>
+                              <ShieldCheck size={16} className="text-ink" />
+                              <span className="text-xs text-ink/60">• {thread.timestamp}</span>
+                            </div>
+                            <span className="text-xs text-accent font-semibold">
+                              Campus Discussion
+                            </span>
+                          </div>
+                        </div>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={Bookmark}
+                          onClick={async () => {
+                            try {
+                              await toggleThreadSave(thread.id);
+                              showToast('Removed from Saved', 'info');
+                              setSavedEntries((prev) => prev.filter((e) => e.id !== item.id));
+                            } catch {
+                              showToast('Unable to update bookmark', 'error');
+                            }
+                          }}
+                          aria-label="Remove saved thread"
+                        >
+                          Saved
+                        </Button>
+                      </div>
+
+                      <p className="text-sm text-ink leading-relaxed break-words font-normal">
+                        {thread.content}
+                      </p>
+
+                      <div className="flex items-center gap-4 text-xs text-ink/60 pt-2 border-t border-ink/12">
+                        <span className="inline-flex items-center gap-1 font-medium text-ink">
+                          <Heart
+                            size={14}
+                            className={thread.isLiked ? 'fill-ink text-ink' : ''}
+                          />{' '}
+                          {thread.likes || 0}
+                        </span>
+                        <span className="inline-flex items-center gap-1 font-medium">
+                          <MessageSquare size={14} /> {thread.repliesCount || 0} replies
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => onNavigate(`threads?thread=${thread.id}`)}
+                          className="ml-auto text-xs text-accent hover:underline font-semibold cursor-pointer"
+                        >
+                          View Full Thread →
+                        </button>
+                      </div>
+                    </Card>
+                  );
+                }
+
+                return null;
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Reel Viewer Modal */}
       <Modal
         isOpen={Boolean(viewingReel)}
@@ -563,10 +960,17 @@ export default function PersonalSpaceScreen({
                   onToggleLike={async (id) => {
                     await toggleReelLike(id);
                   }}
-                  saved={Boolean(savedReels[String(viewingReel.id)])}
-                  onToggleSave={(id) => {
-                    const key = String(id);
-                    setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
+                  saved={savedReelIds.has(String(viewingReel.id))}
+                  onToggleSave={async (id) => {
+                    try {
+                      const res = await toggleReelSave(id);
+                      showToast(
+                        res?.saved ? 'Reel saved to Personal Space' : 'Removed from Saved',
+                        'success'
+                      );
+                    } catch {
+                      showToast('Unable to update bookmark', 'error');
+                    }
                   }}
                   onOpenComments={() => setReelCommentsOpen((prev) => !prev)}
                   onOpenProfile={onOpenPeerProfile}

@@ -86,6 +86,8 @@ export interface AppState {
   mutedUsers: AppMutedUserItem[];
   notifications: AppNotificationItem[];
   savedPostIds: Array<string | number>;
+  savedReelIds: Array<string | number>;
+  savedThreadIds: Array<string | number>;
   trendingTopics: TrendingTopic[];
   thisWeekEvents: ThisWeekEvent[];
   publicPosts: PostItem[];
@@ -142,6 +144,8 @@ interface SocialOverviewResponse {
   mutedUsers?: AppMutedUserItem[];
   notifications?: AppNotificationItem[];
   savedPostIds?: Array<string | number>;
+  savedReelIds?: Array<string | number>;
+  savedThreadIds?: Array<string | number>;
 }
 
 export interface AppContextValue {
@@ -155,7 +159,10 @@ export interface AppContextValue {
   uploadMediaImage: (fileOrDataUrl: File | string) => Promise<UploadMediaResult>;
   createPost: (payload: CreatePostPayload) => Promise<PostItem>;
   togglePostLike: (postId: string | number) => Promise<{ likes: number; liked: boolean } | null>;
+  toggleSaveItem: (type: 'post' | 'reel' | 'thread', id: string | number) => Promise<{ saved: boolean } | null>;
   togglePostSave: (postId: string | number) => Promise<{ saved: boolean } | null>;
+  toggleReelSave: (reelId: string | number) => Promise<{ saved: boolean } | null>;
+  toggleThreadSave: (threadId: string | number) => Promise<{ saved: boolean } | null>;
   hidePost: (postId: string | number) => Promise<void>;
   hideReel: (reelId: string | number) => Promise<void>;
   unhideReel: (reelId: string | number) => Promise<void>;
@@ -250,6 +257,8 @@ function buildEmptyState(): AppState {
     mutedUsers: [],
     notifications: [],
     savedPostIds: [],
+    savedReelIds: [],
+    savedThreadIds: [],
     trendingTopics: [],
     thisWeekEvents: [],
     publicPosts: [],
@@ -309,6 +318,8 @@ const mockInitialState: AppState = {
   ],
   mutedUsers: [{ id: 11, username: 'noise_maker', initials: 'NM', mutedAt: '1 week ago' }],
   savedPostIds: [],
+  savedReelIds: [],
+  savedThreadIds: [],
   notifications: [],
   trendingTopics: [],
   thisWeekEvents: [
@@ -509,6 +520,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         mutedUsers: socialRes?.mutedUsers || [],
         notifications: socialRes?.notifications || [],
         savedPostIds: socialRes?.savedPostIds || [],
+        savedReelIds: socialRes?.savedReelIds || [],
+        savedThreadIds: socialRes?.savedThreadIds || [],
       }));
     } catch (err) {
       console.warn('Backend data hydration failed:', err);
@@ -542,6 +555,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       mutedUsers: socialRes?.mutedUsers || [],
       notifications: socialRes?.notifications || [],
       savedPostIds: socialRes?.savedPostIds || [],
+      savedReelIds: socialRes?.savedReelIds || [],
+      savedThreadIds: socialRes?.savedThreadIds || [],
     }));
   }, [user]);
 
@@ -676,31 +691,83 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return res;
   }, []);
 
-  const togglePostSave = useCallback(async (postId: string | number) => {
-    if (!IS_REAL_BACKEND) {
+  const toggleSaveItem = useCallback(
+    async (type: 'post' | 'reel' | 'thread', id: string | number) => {
+      const key = String(id);
+      const idProp =
+        type === 'post' ? 'savedPostIds' : type === 'reel' ? 'savedReelIds' : 'savedThreadIds';
+
+      let wasSaved = false;
       setState((prev) => {
-        const exists = (prev.savedPostIds || []).includes(postId);
+        const list = (prev[idProp] as Array<string | number>) || [];
+        wasSaved = list.some((item) => String(item) === key);
+        const updated = wasSaved
+          ? list.filter((item) => String(item) !== key)
+          : [...list, id];
         return {
           ...prev,
-          savedPostIds: exists
-            ? (prev.savedPostIds || []).filter((id) => id !== postId)
-            : [...(prev.savedPostIds || []), postId],
+          [idProp]: updated,
         };
       });
-      return null;
-    }
-    const res = await apiRequest<{ saved: boolean }>(
-      `/posts/${encodeURIComponent(postId)}/save`,
-      { method: 'POST' }
-    );
-    setState((prev) => ({
-      ...prev,
-      savedPostIds: res.saved
-        ? Array.from(new Set([...(prev.savedPostIds || []), postId]))
-        : (prev.savedPostIds || []).filter((id) => id !== postId),
-    }));
-    return res;
-  }, []);
+
+      if (!IS_REAL_BACKEND) {
+        return { saved: !wasSaved };
+      }
+
+      try {
+        const method = wasSaved ? 'DELETE' : 'POST';
+        const res = await apiRequest<{ saved: boolean }>(
+          `/saved/${encodeURIComponent(type)}/${encodeURIComponent(id)}`,
+          { method }
+        );
+        setState((prev) => {
+          const list = (prev[idProp] as Array<string | number>) || [];
+          const updated = res.saved
+            ? Array.from(new Set([...list, id]))
+            : list.filter((item) => String(item) !== key);
+          return {
+            ...prev,
+            [idProp]: updated,
+          };
+        });
+        return res;
+      } catch (err) {
+        setState((prev) => {
+          const list = (prev[idProp] as Array<string | number>) || [];
+          const rolledBack = wasSaved
+            ? Array.from(new Set([...list, id]))
+            : list.filter((item) => String(item) !== key);
+          return {
+            ...prev,
+            [idProp]: rolledBack,
+          };
+        });
+        throw err;
+      }
+    },
+    []
+  );
+
+  const togglePostSave = useCallback(
+    async (postId: string | number) => {
+      return toggleSaveItem('post', postId);
+    },
+    [toggleSaveItem]
+  );
+
+  const toggleReelSave = useCallback(
+    async (reelId: string | number) => {
+      return toggleSaveItem('reel', reelId);
+    },
+    [toggleSaveItem]
+  );
+
+  const toggleThreadSave = useCallback(
+    async (threadId: string | number) => {
+      return toggleSaveItem('thread', threadId);
+    },
+    [toggleSaveItem]
+  );
 
   const hidePost = useCallback(async (postId: string | number) => {
     setState((prev) => ({
@@ -1635,7 +1702,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         uploadMediaImage,
         createPost,
         togglePostLike,
+        toggleSaveItem,
         togglePostSave,
+        toggleReelSave,
+        toggleThreadSave,
         hidePost,
         muteAuthor,
         unmuteAuthor,

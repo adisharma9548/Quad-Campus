@@ -156,6 +156,17 @@ CREATE TABLE IF NOT EXISTS post_saves (
   PRIMARY KEY (post_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS saved_items (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL CHECK (target_type IN ('post', 'reel', 'thread')),
+  target_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (user_id, target_type, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_saved_items_user ON saved_items(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_saved_items_target ON saved_items(target_type, target_id);
+
 CREATE TABLE IF NOT EXISTS dismissed_posts (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,

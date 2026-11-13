@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   MessageSquare,
   Heart,
   Share2,
+  Bookmark,
   Send,
   ShieldCheck,
   MoreHorizontal,
@@ -14,7 +15,7 @@ import { Avatar, PrivacyBadge, Card, Button, EmptyState } from '../components/ui
 import ThreadCommentNode from '../components/ThreadCommentNode';
 import ReportModal from '../components/ReportModal';
 import { buildShareUrl, shareContent } from '../utils/shareUrl';
-import type { ThreadReply } from '../types/quad';
+import type { ThreadReply, ThreadItem } from '../types/quad';
 
 export default function ThreadsScreen({
   onNavigate: _onNavigate,
@@ -27,6 +28,7 @@ export default function ThreadsScreen({
     state,
     createThread,
     toggleThreadLike,
+    toggleThreadSave,
     addThreadReply,
     loadMoreThreadReplies,
     loadMoreThreads,
@@ -36,6 +38,10 @@ export default function ThreadsScreen({
   } = useApp();
   const { showToast } = useToast();
   const threadPosts = useMemo(() => state.threadPosts || [], [state.threadPosts]);
+  const savedThreadIds = useMemo(
+    () => new Set((state.savedThreadIds || []).map(String)),
+    [state.savedThreadIds]
+  );
 
   useEffect(() => {
     if (!targetThreadId) return;
@@ -235,7 +241,7 @@ export default function ThreadsScreen({
         />
       ) : (
         <div className="space-y-4">
-          {threadPosts.map((post) => {
+          {threadPosts.map((post: ThreadItem) => {
             const isLiked = Boolean(post.isLiked);
             return (
               <Card
@@ -320,6 +326,28 @@ export default function ThreadsScreen({
                   >
                     <Share2 size={16} />
                   </button>
+
+                  <button
+                    type="button"
+                    aria-label={savedThreadIds.has(String(post.id)) ? 'Remove saved thread' : 'Save thread'}
+                    aria-pressed={savedThreadIds.has(String(post.id))}
+                    onClick={async () => {
+                      try {
+                        const res = await toggleThreadSave(post.id);
+                        showToast(
+                          res?.saved ? 'Thread saved to Personal Space' : 'Removed from Saved',
+                          'success'
+                        );
+                      } catch {
+                        showToast('Unable to save thread', 'error');
+                      }
+                    }}
+                    className={`min-h-[44px] min-w-[44px] p-2 rounded-[8px] flex items-center justify-center transition-colors cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                      savedThreadIds.has(String(post.id)) ? 'text-ink font-bold bg-ink/6' : 'hover:text-ink hover:bg-ink/4'
+                    }`}
+                  >
+                    <Bookmark size={16} className={savedThreadIds.has(String(post.id)) ? 'fill-ink text-ink' : 'text-ink/60'} />
+                  </button>
                 </div>
 
                 {/* Inline Reply Input to Thread */}
@@ -378,7 +406,7 @@ export default function ThreadsScreen({
                 {/* Nested Comments Tree */}
                 {post.replies && post.replies.length > 0 && (
                   <div className="pl-2 sm:pl-12 pt-2 space-y-3">
-                    {post.replies.map((reply) => (
+                    {post.replies.map((reply: ThreadReply) => (
                       <ThreadCommentNode
                         key={reply.id}
                         threadId={post.id}

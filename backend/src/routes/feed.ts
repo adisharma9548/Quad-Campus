@@ -617,12 +617,19 @@ export function registerFeedRoutes(
           post.id,
           viewer.id
         );
+        db.prepare(
+          'DELETE FROM saved_items WHERE target_type = "post" AND target_id = ? AND user_id = ?'
+        ).run(post.id, viewer.id);
       } else {
+        const nowIso = new Date().toISOString();
         db.prepare('INSERT INTO post_saves (post_id, user_id, created_at) VALUES (?, ?, ?)').run(
           post.id,
           viewer.id,
-          new Date().toISOString()
+          nowIso
         );
+        db.prepare(
+          'INSERT OR IGNORE INTO saved_items (id, user_id, target_type, target_id, created_at) VALUES (?, ?, ?, ?, ?)'
+        ).run(`save_${viewer.id}_post_${post.id}`, viewer.id, 'post', post.id, nowIso);
       }
       const savesRow = db
         .prepare('SELECT COUNT(*) AS count FROM post_saves WHERE post_id = ?')

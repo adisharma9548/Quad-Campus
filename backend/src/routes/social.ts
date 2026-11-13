@@ -2186,10 +2186,22 @@ export function registerSocialRoutes(
     }));
 
     const savedPostIds = (
-      db.prepare('SELECT post_id FROM post_saves WHERE user_id = ?').all(uid) as Array<{
-        post_id: string;
+      db.prepare("SELECT target_id FROM saved_items WHERE user_id = ? AND target_type = 'post'").all(uid) as Array<{
+        target_id: string;
       }>
-    ).map((r) => r.post_id);
+    ).map((r) => r.target_id);
+
+    const savedReelIds = (
+      db.prepare("SELECT target_id FROM saved_items WHERE user_id = ? AND target_type = 'reel'").all(uid) as Array<{
+        target_id: string;
+      }>
+    ).map((r) => r.target_id);
+
+    const savedThreadIds = (
+      db.prepare("SELECT target_id FROM saved_items WHERE user_id = ? AND target_type = 'thread'").all(uid) as Array<{
+        target_id: string;
+      }>
+    ).map((r) => r.target_id);
 
     return {
       followers,
@@ -2202,6 +2214,8 @@ export function registerSocialRoutes(
       mutedUsers,
       notifications,
       savedPostIds,
+      savedReelIds,
+      savedThreadIds,
     };
   });
 

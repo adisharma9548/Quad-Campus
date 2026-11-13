@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   Check,
   Film,
@@ -32,7 +32,7 @@ export function PeerProfileModal({
   fallbackPeer,
   onClose,
 }: PeerProfileModalProps) {
-  const { state, requestFollow, toggleReelLike } = useApp();
+  const { state, requestFollow, toggleReelLike, toggleReelSave } = useApp();
   const { showToast } = useToast();
 
   const [profile, setProfile] = useState<PeerProfileData | null>(null);
@@ -40,7 +40,10 @@ export function PeerProfileModal({
   const [error, setError] = useState<string | null>(null);
   const [viewingReelId, setViewingReelId] = useState<string | number | null>(null);
   const [reelCommentsOpen, setReelCommentsOpen] = useState(false);
-  const [savedReels, setSavedReels] = useState<Record<string, boolean>>({});
+  const savedReelIds = useMemo(
+    () => new Set((state.savedReelIds || []).map(String)),
+    [state.savedReelIds]
+  );
   const [shareOffsets, setShareOffsets] = useState<Record<string, number>>({});
   const [isMuted, setIsMuted] = useState<boolean>(() => {
     try {
@@ -398,10 +401,17 @@ export function PeerProfileModal({
                         );
                       }
                     }}
-                    saved={Boolean(savedReels[String(viewingReel.id)])}
-                    onToggleSave={(id) => {
-                      const key = String(id);
-                      setSavedReels((prev) => ({ ...prev, [key]: !prev[key] }));
+                    saved={savedReelIds.has(String(viewingReel.id))}
+                    onToggleSave={async (id) => {
+                      try {
+                        const res = await toggleReelSave(id);
+                        showToast(
+                          res?.saved ? 'Reel saved to Personal Space' : 'Removed from Saved',
+                          'success'
+                        );
+                      } catch {
+                        showToast('Unable to update bookmark', 'error');
+                      }
                     }}
                     onOpenComments={() => setReelCommentsOpen((prev) => !prev)}
                     onShare={(reel) => {

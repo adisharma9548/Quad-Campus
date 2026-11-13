@@ -43,6 +43,31 @@ function migrate(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id, created_at_ms DESC);
     CREATE INDEX IF NOT EXISTS idx_reels_status_created ON reels(status, created_at_ms DESC);
     CREATE INDEX IF NOT EXISTS idx_threads_status_created ON threads(status, created_at_ms DESC);
+
+    CREATE TABLE IF NOT EXISTS saved_items (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      target_type TEXT NOT NULL CHECK (target_type IN ('post', 'reel', 'thread')),
+      target_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (user_id, target_type, target_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_items_user ON saved_items(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_saved_items_target ON saved_items(target_type, target_id);
+
+    INSERT OR IGNORE INTO saved_items (id, user_id, target_type, target_id, created_at)
+    SELECT ('save_' || user_id || '_post_' || post_id), user_id, 'post', post_id, created_at
+    FROM post_saves;
+
+    CREATE TRIGGER IF NOT EXISTS trg_delete_post_saved AFTER DELETE ON posts BEGIN
+      DELETE FROM saved_items WHERE target_type = 'post' AND target_id = OLD.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_delete_reel_saved AFTER DELETE ON reels BEGIN
+      DELETE FROM saved_items WHERE target_type = 'reel' AND target_id = OLD.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_delete_thread_saved AFTER DELETE ON threads BEGIN
+      DELETE FROM saved_items WHERE target_type = 'thread' AND target_id = OLD.id;
+    END;
   `);
 
   if (!hasColumn(db, 'posts', 'edited_at_ms')) {
