@@ -60,12 +60,23 @@ export default function ThreadsScreen({
   const [replyText, setReplyText] = useState('');
   const [highlightedCommentId, setHighlightedCommentId] = useState<string | null>(null);
   const [loadingMoreThreads, setLoadingMoreThreads] = useState(false);
+  const [animatingLikes, setAnimatingLikes] = useState<Set<string>>(new Set());
+  const [animatingBookmarks, setAnimatingBookmarks] = useState<Set<string>>(new Set());
   const [reportTarget, setReportTarget] = useState<{
     threadId: string | number;
     comment: ThreadReply;
   } | null>(null);
 
   const toggleLike = async (id: string | number) => {
+    const sId = String(id);
+    setAnimatingLikes((prev) => new Set(prev).add(sId));
+    window.setTimeout(() => {
+      setAnimatingLikes((prev) => {
+        const next = new Set(prev);
+        next.delete(sId);
+        return next;
+      });
+    }, 380);
     await toggleThreadLike(id);
   };
 
@@ -288,12 +299,19 @@ export default function ThreadsScreen({
                     type="button"
                     onClick={() => toggleLike(post.id)}
                     aria-label={`${isLiked ? 'Unlike thread' : 'Like thread'} ${post.likes || 0}`}
-                    className={`min-h-[44px] px-3 py-2 rounded-[8px] flex items-center gap-2 transition-all cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                      isLiked ? 'text-ink font-bold bg-ink/6' : 'hover:text-ink hover:bg-ink/4'
+                    className={`min-h-[44px] px-3 py-2 rounded-[8px] flex items-center gap-2 transition-all cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                      isLiked ? 'text-like font-bold bg-like/10' : 'hover:text-ink hover:bg-ink/4'
                     }`}
                   >
-                    <Heart size={16} className={isLiked ? 'fill-ink text-ink' : 'text-ink/60'} />
-                    <span>{post.likes || 0}</span>
+                    <Heart
+                      size={16}
+                      className={`${isLiked ? 'fill-like text-like' : 'text-ink/60'} ${
+                        animatingLikes.has(String(post.id)) ? 'animate-heart-pop' : ''
+                      }`}
+                    />
+                    <span className={animatingLikes.has(String(post.id)) ? 'animate-number-pulse text-like font-bold' : ''}>
+                      {post.likes || 0}
+                    </span>
                   </button>
 
                   <button
@@ -304,7 +322,7 @@ export default function ThreadsScreen({
                       setReplyText(nextOpen ? `@${post.username} ` : '');
                     }}
                     aria-label={`${post.replyCount || (post.replies?.length || 0)} replies, reply to @${post.username}`}
-                    className="min-h-[44px] px-3 py-2 rounded-[8px] flex items-center gap-2 hover:text-ink hover:bg-ink/4 transition-colors cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="min-h-[44px] px-3 py-2 rounded-[8px] flex items-center gap-2 hover:text-ink hover:bg-ink/4 transition-colors cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <MessageSquare size={16} />
                     <span>{post.replyCount ?? (post.replies?.length || 0)} replies</span>
@@ -322,7 +340,7 @@ export default function ThreadsScreen({
                         onToast: (msg, variant) => showToast(msg, variant || 'success'),
                       });
                     }}
-                    className="min-h-[44px] min-w-[44px] p-2 rounded-[8px] flex items-center justify-center hover:text-ink hover:bg-ink/4 transition-colors cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="min-h-[44px] min-w-[44px] p-2 rounded-[8px] flex items-center justify-center hover:text-ink hover:bg-ink/4 transition-colors cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <Share2 size={16} />
                   </button>
@@ -332,6 +350,15 @@ export default function ThreadsScreen({
                     aria-label={savedThreadIds.has(String(post.id)) ? 'Remove saved thread' : 'Save thread'}
                     aria-pressed={savedThreadIds.has(String(post.id))}
                     onClick={async () => {
+                      const sId = String(post.id);
+                      setAnimatingBookmarks((prev) => new Set(prev).add(sId));
+                      window.setTimeout(() => {
+                        setAnimatingBookmarks((prev) => {
+                          const next = new Set(prev);
+                          next.delete(sId);
+                          return next;
+                        });
+                      }, 340);
                       try {
                         const res = await toggleThreadSave(post.id);
                         showToast(
@@ -342,11 +369,16 @@ export default function ThreadsScreen({
                         showToast('Unable to save thread', 'error');
                       }
                     }}
-                    className={`min-h-[44px] min-w-[44px] p-2 rounded-[8px] flex items-center justify-center transition-colors cursor-pointer active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                      savedThreadIds.has(String(post.id)) ? 'text-ink font-bold bg-ink/6' : 'hover:text-ink hover:bg-ink/4'
+                    className={`min-h-[44px] min-w-[44px] p-2 rounded-[8px] flex items-center justify-center transition-colors cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                      savedThreadIds.has(String(post.id)) ? 'text-accent font-bold bg-accent/10' : 'hover:text-ink hover:bg-ink/4'
                     }`}
                   >
-                    <Bookmark size={16} className={savedThreadIds.has(String(post.id)) ? 'fill-ink text-ink' : 'text-ink/60'} />
+                    <Bookmark
+                      size={16}
+                      className={`${
+                        savedThreadIds.has(String(post.id)) ? 'fill-accent text-accent' : 'text-ink/60'
+                      } ${animatingBookmarks.has(String(post.id)) ? 'animate-bookmark-pop' : ''}`}
+                    />
                   </button>
                 </div>
 

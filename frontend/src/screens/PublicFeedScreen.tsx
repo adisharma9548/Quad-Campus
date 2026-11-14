@@ -42,6 +42,7 @@ const PRIVACY_BANNER_STORAGE_KEY = 'quad_feed_privacy_banner_dismissed';
 export interface PublicFeedScreenProps {
   onNavigate: (screen: string) => void;
   onViewWeekItem?: (item: import('../types/quad').ThisWeekEvent) => void;
+  onOpenCreateReel?: () => void;
   isLoading?: boolean;
   hasError?: boolean;
   onRetry?: () => void;
@@ -52,6 +53,7 @@ export interface PublicFeedScreenProps {
 export default function PublicFeedScreen({
   onNavigate,
   onViewWeekItem,
+  onOpenCreateReel,
   isLoading: propLoading = false,
   hasError = false,
   onRetry,
@@ -80,9 +82,10 @@ export default function PublicFeedScreen({
   const [confirmReportPost, setConfirmReportPost] = useState<import('../types/quad').PostItem | null>(null);
   const [commentPostId, setCommentPostId] = useState<string | number | null>(null);
   const [commentInput, setCommentInput] = useState('');
-  const [feedFilter, setFeedFilter] = useState<'all' | 'branch' | 'year'>(() => {
+  const [feedFilter, setFeedFilter] = useState<'all' | 'branch' | 'year' | 'resolved'>(() => {
     if (initialTab === 'department' || initialTab === 'branch') return 'branch';
     if (initialTab === 'batch' || initialTab === 'year') return 'year';
+    if (initialTab === 'resolved') return 'resolved';
     return 'all';
   });
 
@@ -189,7 +192,8 @@ export default function PublicFeedScreen({
     }
     let cancelled = false;
     setIsSearching(true);
-    refreshFeed({ scope: feedFilter, q: searchQuery || activeTag || undefined })
+    const scopeParam = feedFilter === 'resolved' ? 'all' : feedFilter;
+    refreshFeed({ scope: scopeParam, q: searchQuery || activeTag || undefined })
       .catch(() => {
         if (!cancelled) showToast('Could not load posts. Check your connection.', 'error');
       })
@@ -226,6 +230,11 @@ export default function PublicFeedScreen({
 
   const filteredPosts = useMemo(() => {
     return visiblePosts.filter((post) => {
+      if (feedFilter === 'resolved') {
+        if (post.type !== 'Question' || !post.bestAnswerId) {
+          return false;
+        }
+      }
       if (!IS_REAL_BACKEND && feedFilter === 'branch') {
         const postBranch = (post.branch || '').toLowerCase();
         if (post.audience !== 'branch' && postBranch !== userBranch.toLowerCase()) {
@@ -244,9 +253,23 @@ export default function PublicFeedScreen({
           return false;
         }
       }
+      // Postel's Law (#18): Forgiving, liberal search matching across handles (@), tags (#), and content
+      if (searchQuery && !IS_REAL_BACKEND) {
+        const raw = searchQuery.trim().toLowerCase();
+        const clean = raw.replace(/^[@#]/, '');
+        const usernameMatch = (post.username || '').toLowerCase().includes(clean);
+        const titleMatch = (post.title || '').toLowerCase().includes(clean);
+        const contentMatch = (post.content || '').toLowerCase().includes(clean);
+        const tags = Array.isArray(post.hashtags) ? post.hashtags : [];
+        const hashtagMatch = tags.some((t) => t.toLowerCase().replace(/^#/, '').includes(clean));
+        const branchMatch = (post.branch || '').toLowerCase().includes(clean);
+        if (!usernameMatch && !titleMatch && !contentMatch && !hashtagMatch && !branchMatch) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [visiblePosts, feedFilter, activeTag, userBranch, userYear]);
+  }, [visiblePosts, feedFilter, activeTag, searchQuery, userBranch, userYear]);
 
   const handleDismissBanner = () => {
     setBannerDismissed(true);
@@ -436,7 +459,7 @@ export default function PublicFeedScreen({
       )}
 
       {/* Compact "This week" summary above feed when right rail is hidden (1024-1099px) */}
-      <div className="quad-compact-week">
+      <div className="quad-compact-week mb-4">
         <ThisWeekCard
           compact
           items={thisWeekEvents}
@@ -444,63 +467,57 @@ export default function PublicFeedScreen({
         />
       </div>
 
-      {/* 1. Campus Reels Strip */}
-      <ReelStrip
-        reels={reels}
-        isLoading={isLoading}
-        onSelectReel={() => onNavigate?.('reels')}
-        onSeeAll={() => onNavigate?.('reels')}
-      />
+      {/* STICKY SEARCH BAR & SCOPE CHIPS (Top section) */}
+      <section className="sticky top-16 bg-canvas/95 backdrop-blur-sm z-30 pb-3 border-b border-ink/12 mb-6">
+        {/* Search Input Envelope */}
+        <div className="relative w-full mb-3" role="search">
+          <label htmlFor="feed-search" className="sr-only">
+            Search posts, usernames, and tags
+          </label>
+          <Search
+            size={18}
+            className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink/45 pointer-events-none"
+            aria-hidden="true"
+          />
+          <input
+            id="feed-search"
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search posts, usernames, #tags"
+            autoComplete="off"
+            maxLength={80}
+            className="w-full h-11 pl-12 pr-12 text-sm rounded-[8px] border border-ink/12 bg-transparent text-ink placeholder:text-ink/45 focus:border-accent focus:ring-2 focus:ring-accent/30 focus:outline-none transition-all"
+          />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchInput('');
+                setSearchQuery('');
+              }}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-ink/40 hover:text-ink flex items-center justify-center p-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-full"
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          )}
+          <p className="sr-only" role="status" aria-live="polite">
+            {isSearching ? 'Searching' : searchQuery ? `${filteredPosts.length} results` : ''}
+          </p>
+        </div>
 
-      {/* Search posts, people's usernames, and #tags */}
-      <div role="search" className="relative">
-        <label htmlFor="feed-search" className="sr-only">
-          Search posts, usernames, and tags
-        </label>
-        <Search
-          size={16}
-          className="absolute left-4 top-1/2 -translate-y-1/2 text-ink/60 pointer-events-none"
-          aria-hidden="true"
-        />
-        <input
-          id="feed-search"
-          type="search"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Search posts, usernames, #tags"
-          autoComplete="off"
-          maxLength={80}
-          className="w-full min-h-[44px] pl-12 pr-12 rounded-full bg-ink/6 border border-ink/12 text-sm text-ink placeholder:text-ink/60 focus:outline-none focus:ring-2 focus:ring-accent focus:bg-canvas"
-        />
-        {searchInput && (
-          <button
-            type="button"
-            onClick={() => {
-              setSearchInput('');
-              setSearchQuery('');
-            }}
-            aria-label="Clear search"
-            className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full text-ink/60 hover:text-ink cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <X size={16} aria-hidden="true" />
-          </button>
-        )}
-        <p className="sr-only" role="status" aria-live="polite">
-          {isSearching ? 'Searching' : searchQuery ? `${filteredPosts.length} results` : ''}
-        </p>
-      </div>
-
-      {/* 2. Filter Pills: All campus (ink-filled), My branch, My year (outlined) */}
-      <div className="flex items-center justify-between gap-2 pb-3 border-b border-ink/12 flex-wrap">
+        {/* Scope Chips Row */}
         <div
           role="group"
           aria-label="Feed filters"
-          className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1"
+          className="flex items-center gap-2 overflow-x-auto py-1 no-scrollbar"
         >
           {([
             { id: 'all', label: 'All campus' },
             { id: 'branch', label: 'My branch' },
             { id: 'year', label: 'My year' },
+            { id: 'resolved', label: 'Resolved Q&A' },
           ] as const).map((tab) => {
             const active = feedFilter === tab.id;
             return (
@@ -509,34 +526,43 @@ export default function PublicFeedScreen({
                 type="button"
                 onClick={() => setFeedFilter(tab.id)}
                 aria-pressed={active}
-                className={`min-h-[44px] px-4 py-2 rounded-full text-xs font-semibold inline-flex items-center transition-colors duration-150 cursor-pointer border shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                className={`h-8 px-3 rounded-[8px] text-xs font-medium flex items-center justify-center shrink-0 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
                   active
-                    ? 'bg-ink text-canvas border-ink'
-                    : 'bg-canvas text-ink border-ink/12 hover:bg-ink/8'
+                    ? 'bg-ink text-canvas font-semibold shadow-xs'
+                    : 'border border-ink/12 bg-ink/6 text-ink hover:bg-ink/8'
                 }`}
               >
                 {tab.label}
               </button>
             );
           })}
+
+          {activeTag && (
+            <button
+              type="button"
+              onClick={() => setActiveTag(null)}
+              aria-label={`Clear ${activeTag} filter`}
+              className="h-8 px-3 rounded-[8px] bg-accent/10 border border-accent/20 text-xs font-semibold text-accent inline-flex items-center gap-1 hover:bg-accent/15 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <span>{activeTag.startsWith('#') ? activeTag : `#${activeTag}`}</span>
+              <X size={14} aria-hidden="true" />
+            </button>
+          )}
         </div>
+      </section>
 
-        {activeTag && (
-          <button
-            type="button"
-            onClick={() => setActiveTag(null)}
-            aria-label={`Clear ${activeTag} filter`}
-            className="min-h-[44px] px-3 py-2 rounded-full bg-ink/6 border border-ink/12 text-xs font-semibold text-accent inline-flex items-center gap-1 hover:bg-ink/8 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <span>{activeTag}</span>
-            <X size={16} className="text-ink" aria-hidden="true" />
-          </button>
-        )}
-      </div>
+      {/* HORIZONTAL REEL AVATAR STRIP */}
+      <ReelStrip
+        reels={reels}
+        isLoading={isLoading}
+        onSelectReel={() => onNavigate?.('reels')}
+        onSeeAll={() => onNavigate?.('reels')}
+        onOpenCreateReel={onOpenCreateReel}
+      />
 
-      {/* 3. Post Cards Stream (12px gap) + Loading / Error / Empty states */}
+      {/* FEED STREAM: POST CARDS SECTION */}
       {isLoading ? (
-        <div aria-label="Loading campus posts" className="space-y-3">
+        <div aria-label="Loading campus posts" className="space-y-6">
           {[1, 2, 3].map((idx) => (
             <PostCardSkeleton key={idx} />
           ))}
@@ -592,7 +618,7 @@ export default function PublicFeedScreen({
           />
         </Card>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-6">
           {filteredPosts.map((post) => (
             <PostCard
               key={post.id}
@@ -607,6 +633,30 @@ export default function PublicFeedScreen({
               onShareClick={handleCopyLink}
             />
           ))}
+
+          {/* END STATE: All Caught Up */}
+          <div className="py-8 px-4 text-center border-t border-ink/12 mt-8 flex flex-col items-center justify-center">
+            <div className="w-10 h-10 rounded-full bg-ink/6 border border-ink/12 flex items-center justify-center mb-3">
+              <Check size={20} strokeWidth={2.5} className="text-ink" aria-hidden="true" />
+            </div>
+            <h3 className="font-display text-lg font-bold text-ink mb-1">
+              You are all caught up
+            </h3>
+            <p className="text-sm text-ink/60 max-w-sm">
+              No new posts from North Campus or your branch in the last 24 hours.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                const scopeParam = feedFilter === 'resolved' ? 'all' : feedFilter;
+                refreshFeed({ scope: scopeParam, q: searchQuery || activeTag || undefined });
+                showToast('Feed refreshed', 'info');
+              }}
+              className="mt-4 px-4 py-2 rounded-[8px] text-sm font-medium border border-ink/12 hover:bg-ink/6 transition-colors min-h-[44px] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Refresh Feed
+            </button>
+          </div>
         </div>
       )}
 

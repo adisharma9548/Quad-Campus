@@ -2,13 +2,15 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Heart,
   MessageCircle,
-  Share2,
+  Send,
   MoreHorizontal,
   Bookmark,
   MapPin,
   Check,
+  Lock,
+  Globe,
 } from 'lucide-react';
-import { Avatar, Card, Skeleton } from './ui';
+import { Avatar, Skeleton } from './ui';
 import { TypeChip } from './TypeChip';
 import { useTheme } from '../context/ThemeContext';
 import { resolveApiMediaUrl } from '../services/apiClient';
@@ -35,33 +37,47 @@ const AUDIENCE_LABELS: Record<string, string> = {
   year: 'My year',
   followers: 'Followers only',
   group: 'Circle only',
+  public: 'Campus Public',
 };
 
 export function PostCardSkeleton() {
   return (
-    <Card
-      padding={false}
-      className="p-4 bg-canvas border border-ink/12 rounded-[12px] space-y-3"
+    <article
+      aria-hidden="true"
+      className="rounded-[12px] border border-ink/12 bg-canvas p-4 animate-pulse"
     >
-      <Skeleton variant="rect" width={88} height={24} className="rounded-full" />
-      <div className="flex items-center gap-3">
-        <Skeleton variant="circle" width={36} height={36} />
-        <div className="space-y-1 flex-1">
-          <Skeleton variant="rect" width={120} height={14} />
-          <Skeleton variant="rect" width={72} height={12} />
+      {/* Author Skeleton Row */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-full bg-ink/6" />
+          <div className="space-y-1">
+            <div className="w-24 h-3 rounded bg-ink/6" />
+            <div className="w-32 h-2 rounded bg-ink/6" />
+          </div>
         </div>
+        <div className="w-6 h-6 rounded bg-ink/6" />
       </div>
-      <div className="space-y-2">
-        <Skeleton variant="rect" height={18} className="w-3/4" />
-        <Skeleton variant="rect" height={14} className="w-full" />
-        <Skeleton variant="rect" height={14} className="w-5/6" />
+
+      {/* Text Placeholders */}
+      <div className="space-y-2 mb-4">
+        <div className="w-3/4 h-4 rounded bg-ink/6" />
+        <div className="w-full h-3 rounded bg-ink/6" />
+        <div className="w-5/6 h-3 rounded bg-ink/6" />
       </div>
-      <div className="flex items-center gap-3 pt-3 border-t border-ink/12">
-        <Skeleton variant="rect" width={56} height={28} />
-        <Skeleton variant="rect" width={56} height={28} />
-        <Skeleton variant="rect" width={56} height={28} />
+
+      {/* 16:9 Skeleton Block */}
+      <div className="aspect-video w-full rounded-[8px] bg-ink/6 mb-3" />
+
+      {/* Action Bar Placeholders */}
+      <div className="flex items-center justify-between pt-2 border-t border-ink/8">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-6 rounded bg-ink/6" />
+          <div className="w-12 h-6 rounded bg-ink/6" />
+          <div className="w-12 h-6 rounded bg-ink/6" />
+        </div>
+        <div className="w-6 h-6 rounded bg-ink/6" />
       </div>
-    </Card>
+    </article>
   );
 }
 
@@ -79,6 +95,8 @@ export function PostCard({
   const { dark } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [isLikeAnimating, setIsLikeAnimating] = useState(false);
+  const [isBookmarkAnimating, setIsBookmarkAnimating] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
   const liked = Boolean(post.isLiked);
@@ -88,10 +106,8 @@ export function PostCard({
   const isQuestion = postType === 'Question';
   const isResolved = isQuestion && Boolean(post.bestAnswerId);
 
-  const nonDefaultAudience =
-    post.audience && post.audience !== 'public'
-      ? AUDIENCE_LABELS[post.audience] || post.audience
-      : null;
+  const audienceLabel = AUDIENCE_LABELS[post.audience || 'public'] || post.audience || 'Campus Public';
+  const isPrivateAudience = post.audience && post.audience !== 'public';
 
   const isLongBody = (post.content || '').length > 190;
   const displayHeadline =
@@ -111,8 +127,22 @@ export function PostCard({
   }, [mediaSrc]);
 
   const handleLike = async () => {
+    if (!liked) {
+      setIsLikeAnimating(true);
+      window.setTimeout(() => setIsLikeAnimating(false), 380);
+    }
     if (onToggleLike) {
       await onToggleLike(post);
+    }
+  };
+
+  const handleBookmark = async () => {
+    if (!isSaved) {
+      setIsBookmarkAnimating(true);
+      window.setTimeout(() => setIsBookmarkAnimating(false), 340);
+    }
+    if (onToggleSave) {
+      await onToggleSave(post);
     }
   };
 
@@ -121,113 +151,100 @@ export function PostCard({
     : post.comments || 0;
 
   return (
-    <Card
+    <article
       id={`post-${post.id}`}
-      padding={false}
-      className="p-4 bg-canvas border border-ink/12 rounded-[12px] hover:border-ink/24 transition-colors duration-150 space-y-3"
+      className="rounded-[12px] border border-ink/12 bg-canvas p-4 transition-all hover:border-ink/20"
     >
-      {/* Top Post Type Chip + Resolved Chip for Question Posts */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
-          <TypeChip type={postType} />
-          {isResolved && (
-            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-ink text-canvas font-sans text-[11px] font-semibold leading-none">
-              <Check size={12} strokeWidth={2.5} aria-hidden="true" />
-              <span>Resolved</span>
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Author Row: 36px Avatar, @username semibold, 1 meta line, ⋯ menu */}
-      <div className="flex items-center justify-between gap-3">
+      {/* 1. Card Header / Author Info */}
+      <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3 min-w-0">
           <Avatar
             initials={post.initials || 'ST'}
             username={post.username}
             src={post.avatarUrl}
             hasUnseenReel={hasUnseenReel}
-            size={36}
+            size="author"
           />
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink tracking-tight truncate">
-              @{post.username}
-            </p>
-            <p className="text-xs text-ink/60 flex items-center gap-1 flex-wrap">
-              <span>{post.timestamp}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-ink truncate">
+                @{post.username}
+              </span>
+              <span className="text-xs text-ink/60 shrink-0">
+                · {post.timestamp}
+              </span>
               {post.edited && (
-                <>
-                  <span aria-hidden="true">•</span>
-                  <span>edited</span>
-                </>
+                <span className="text-xs text-ink/60 shrink-0">· edited</span>
               )}
-              {nonDefaultAudience && (
-                <>
-                  <span aria-hidden="true">•</span>
-                  <span>{nonDefaultAudience}</span>
-                </>
+            </div>
+
+            {/* Audience chip */}
+            <div className="inline-flex items-center gap-1 text-[11px] text-ink/60 mt-1">
+              {isPrivateAudience ? (
+                <Lock size={12} className="shrink-0" aria-hidden="true" />
+              ) : (
+                <Globe size={12} className="shrink-0" aria-hidden="true" />
               )}
-            </p>
+              <span>Visible to: {audienceLabel}</span>
+            </div>
           </div>
         </div>
 
+        {/* Contextual Menu Button */}
         <button
           type="button"
           onClick={() => onMore?.(post)}
-          className="min-h-[44px] min-w-[44px] p-2 rounded-[8px] hover:bg-ink/8 active:bg-ink/12 transition-colors duration-150 text-ink/60 hover:text-ink cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          aria-label={`Post actions menu for @${post.username}`}
+          aria-label={`More options for @${post.username}'s post`}
+          className="w-8 h-8 rounded-[8px] flex items-center justify-center text-ink/50 hover:text-ink hover:bg-ink/6 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          <MoreHorizontal size={20} />
+          <MoreHorizontal size={18} aria-hidden="true" />
         </button>
       </div>
 
-      {/* Headline (16px semibold) + Body (14px, 4-line clamp) + Hashtags (13px) */}
-      <div className="space-y-2">
-        {displayHeadline && (
-          <h3 className="text-base font-semibold text-ink leading-snug break-words">
-            {displayHeadline}
-          </h3>
-        )}
-
-        <div>
-          <p
-            className={`text-sm font-normal leading-relaxed text-ink/80 break-words ${
-              !expanded && isLongBody ? 'line-clamp-4' : ''
-            }`}
-          >
-            {post.content}
-          </p>
-          {isLongBody && (
-            <button
-              type="button"
-              onClick={() => setExpanded((prev) => !prev)}
-              className="min-h-[44px] inline-flex items-center text-xs font-semibold text-accent hover:underline cursor-pointer rounded-[8px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              {expanded ? 'Show less' : 'Read more'}
-            </button>
-          )}
-        </div>
-
-        {/* Dedicated Hashtags Row: 13px accent links */}
-        {Array.isArray(post.hashtags) && post.hashtags.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            {post.hashtags.map((tag) => (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => onHashtagClick?.(tag)}
-                className="min-h-[44px] inline-flex items-center px-2 py-1 rounded-[8px] text-[13px] font-medium text-accent hover:bg-ink/8 hover:underline cursor-pointer transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                {tag}
-              </button>
-            ))}
-          </div>
-        )}
+      {/* 2. Type Label */}
+      <div className="mb-2">
+        <TypeChip type={postType} />
       </div>
 
-      {/* Optional 16:9 Media Container + Skeleton + alt text + Location chip */}
+      {/* 3. Post Content: Headline & Body */}
+      {displayHeadline && (
+        <h2 className="text-base text-ink font-semibold mb-1 leading-snug break-words">
+          {displayHeadline}
+        </h2>
+      )}
+
+      <p className="text-sm text-ink/60 mb-2 leading-relaxed break-words">
+        {post.content}
+        {isLongBody && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="text-accent text-sm font-medium hover:underline ml-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            {expanded ? 'Show less' : 'Read more'}
+          </button>
+        )}
+      </p>
+
+      {/* 4. Blue Hashtags */}
+      {Array.isArray(post.hashtags) && post.hashtags.length > 0 && (
+        <div className="flex flex-wrap gap-2 text-xs text-accent font-medium mb-3">
+          {post.hashtags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => onHashtagClick?.(tag)}
+              className="hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              {tag.startsWith('#') ? tag : `#${tag}`}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 5. 16:9 Image Preview Container with subtle Location Pill */}
       {post.hasImage && (
-        <div className="relative aspect-video w-full rounded-[8px] overflow-hidden border border-ink/12 bg-ink/6">
+        <div className="relative aspect-video w-full rounded-[8px] overflow-hidden border border-ink/12 mb-3 bg-ink/3">
           {!mediaLoaded && (
             <Skeleton variant="rect" className="w-full h-full absolute inset-0" />
           )}
@@ -242,82 +259,98 @@ export function PostCard({
             }`}
           />
           {post.location && (
-            <div className="absolute bottom-3 left-3 inline-flex items-center gap-1 px-3 py-1 rounded-full bg-canvas border border-ink/12 text-xs font-medium text-ink">
-              <MapPin size={14} className="text-ink shrink-0" aria-hidden="true" />
+            <div className="absolute bottom-2 left-2 px-2 py-1 rounded-[6px] bg-canvas/90 backdrop-blur-sm border border-ink/12 flex items-center gap-1 text-xs text-ink">
+              <MapPin size={12} className="text-ink/60 shrink-0" aria-hidden="true" />
               <span>{post.location}</span>
             </div>
           )}
         </div>
       )}
 
-      {/* Action Row: Like (filled Ink heart), Comment / Answers, Share; Bookmark right */}
-      <div className="flex items-center justify-between pt-2 border-t border-ink/12 text-xs font-sans">
-        <div className="flex items-center gap-1 sm:gap-2">
+      {/* 6. Quiet Action Row */}
+      <div className="flex items-center justify-between pt-2 border-t border-ink/8 text-xs font-sans">
+        <div className="flex items-center gap-1 sm:gap-4">
+          {/* Heart Button */}
           <button
             type="button"
             onClick={handleLike}
-            aria-label={liked ? `Unlike post, ${likeCount} likes` : `Like post, ${likeCount} likes`}
+            aria-label={liked ? `Unlike, ${likeCount} likes` : `Like, ${likeCount} likes`}
             aria-pressed={liked}
-            className={`min-h-[44px] min-w-[44px] px-3 py-2 rounded-[8px] inline-flex items-center gap-2 transition-colors duration-150 cursor-pointer active:bg-ink/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+            className={`flex items-center gap-1 px-3 py-2 rounded-[8px] min-h-[44px] transition-colors cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
               liked
-                ? 'text-ink font-semibold bg-ink/6'
-                : 'text-ink/60 hover:text-ink hover:bg-ink/8'
+                ? 'text-like font-medium bg-like/8'
+                : 'text-ink/55 hover:text-ink hover:bg-ink/6'
             }`}
           >
             <Heart
               size={16}
-              className={liked ? 'fill-ink text-ink' : 'text-ink/60'}
+              className={`${liked ? 'fill-like text-like' : 'text-ink/55'} ${
+                isLikeAnimating ? 'animate-heart-pop' : ''
+              }`}
               aria-hidden="true"
             />
-            <span>{likeCount}</span>
+            <span className={isLikeAnimating ? 'animate-number-pulse text-like font-bold' : ''}>
+              {likeCount}
+            </span>
           </button>
 
+          {/* Comment Button with Resolved Badge */}
           <button
             type="button"
             onClick={() => onCommentClick?.(post)}
             aria-label={
               isQuestion
                 ? `View ${commentCount} answers`
-                : `Comment on post, ${commentCount} comments`
+                : `View ${commentCount} comments`
             }
-            className="min-h-[44px] min-w-[44px] px-3 py-2 rounded-[8px] inline-flex items-center gap-2 text-ink/60 hover:text-ink hover:bg-ink/8 active:bg-ink/12 transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="flex items-center gap-1 px-3 py-2 rounded-[8px] text-ink/55 hover:text-ink hover:bg-ink/6 min-h-[44px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
             <MessageCircle size={16} aria-hidden="true" />
             <span>
               {isQuestion ? `${commentCount} answers` : commentCount}
             </span>
+            {isResolved && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium quad-resolved-badge ml-1">
+                <Check size={12} strokeWidth={2.5} aria-hidden="true" />
+                <span>Resolved</span>
+              </span>
+            )}
           </button>
 
+          {/* Share Button */}
           <button
             type="button"
             onClick={() => onShareClick?.(post)}
-            aria-label={`Share post, ${post.shares || 0} shares`}
-            className="min-h-[44px] min-w-[44px] px-3 py-2 rounded-[8px] inline-flex items-center gap-2 text-ink/60 hover:text-ink hover:bg-ink/8 active:bg-ink/12 transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            aria-label={`Share, ${post.shares || 0} shares`}
+            className="flex items-center gap-1 px-3 py-2 rounded-[8px] text-ink/55 hover:text-ink hover:bg-ink/6 min-h-[44px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            <Share2 size={16} aria-hidden="true" />
+            <Send size={16} aria-hidden="true" />
             <span>{post.shares || 0}</span>
           </button>
         </div>
 
+        {/* Bookmark Button (on right) */}
         <button
           type="button"
-          onClick={() => onToggleSave?.(post)}
-          aria-label={isSaved ? 'Remove bookmark' : 'Bookmark post'}
+          onClick={handleBookmark}
+          aria-label={isSaved ? 'Remove from bookmarks' : 'Save bookmark'}
           aria-pressed={isSaved}
-          className={`min-h-[44px] min-w-[44px] p-2 rounded-[8px] transition-colors duration-150 cursor-pointer flex items-center justify-center active:bg-ink/12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          className={`w-11 h-11 flex items-center justify-center rounded-[8px] transition-all cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
             isSaved
               ? 'text-ink bg-ink/6'
-              : 'text-ink/60 hover:text-ink hover:bg-ink/8'
+              : 'text-ink/55 hover:text-ink hover:bg-ink/6'
           }`}
         >
           <Bookmark
             size={16}
-            className={isSaved ? 'fill-ink text-ink' : 'text-ink/60'}
+            className={`${isSaved ? 'fill-ink text-ink' : 'text-ink/55'} ${
+              isBookmarkAnimating ? 'animate-bookmark-pop' : ''
+            }`}
             aria-hidden="true"
           />
         </button>
       </div>
-    </Card>
+    </article>
   );
 }
 

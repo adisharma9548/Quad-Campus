@@ -291,9 +291,13 @@ function AppShell() {
   const [reelsControlsVisible, setReelsControlsVisible] = useState(true);
   const [isSidebarPinned, setIsSidebarPinned] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('quad_sidebar_pinned') === 'true';
+      const stored = localStorage.getItem('quad_sidebar_pinned');
+      if (stored !== null) {
+        return stored === 'true';
+      }
+      return window.innerWidth >= 1280;
     }
-    return false;
+    return true;
   });
 
   const toggleSidebarPin = useCallback(() => {
@@ -596,185 +600,202 @@ function AppShell() {
         className={
           isReelsPage
             ? 'quad-floating-header--reels px-4 lg:px-6 py-3'
-            : 'sticky top-0 z-40 bg-canvas border-b border-ink/12 px-6 lg:px-8 py-3'
+            : 'fixed top-0 left-0 right-0 h-16 px-6 flex items-center justify-between bg-canvas z-40 border-b border-ink/12'
         }
       >
-        <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-4">
-          {/* Left Brand Identity: Logo mark + "Quad" wordmark */}
-          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3">
+          {/* Brand Anchor: Quad Logo + Quad Wordmark + Campus Node Badge */}
+          <button
+            type="button"
+            onClick={() => navigate(isAuthenticated ? 'feed' : 'welcome')}
+            className="min-h-[44px] flex items-center gap-3 text-left cursor-pointer rounded-[8px] pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <QuadLogo size={32} />
+            <span className="font-display font-bold text-xl tracking-tight text-ink leading-none">
+              Quad
+            </span>
+          </button>
+          <span className="hidden md:inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-ink/6 text-ink/60 ml-1 border border-ink/8">
+            {institution.networkLabel || 'North Campus Node'}
+          </span>
+        </div>
+
+        {/* Center Screen Switcher Menu (Gated strictly on explicit dev flag) */}
+        {showDevSwitcher && (
+          <div className="relative">
             <button
               type="button"
-              onClick={() => navigate(isAuthenticated ? 'feed' : 'welcome')}
-              className="min-h-[44px] flex items-center gap-3 text-left cursor-pointer rounded-[8px] pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              onClick={() => setSwitcherOpen(!switcherOpen)}
+              className="min-h-[44px] flex items-center gap-2 px-3 py-2 rounded-full bg-canvas border border-ink/12 hover:border-ink/24 text-xs font-semibold text-ink transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <QuadLogo size={32} />
-              <span className="font-display font-bold text-lg tracking-tight text-ink leading-none">
-                Quad
-              </span>
+              <span>Screen: {SCREENS[currentScreen]?.label}</span>
+              <ChevronDown
+                size={16}
+                className={`transition-transform duration-150 text-ink/60 ${
+                  switcherOpen ? 'rotate-180' : ''
+                }`}
+              />
             </button>
-          </div>
 
-          {/* Center Screen Switcher Menu (Gated strictly on explicit dev flag) */}
-          {showDevSwitcher && (
-            <div className="relative">
+            {switcherOpen && (
+              <div className="absolute top-full right-0 sm:left-1/2 sm:-translate-x-1/2 mt-2 w-72 sm:w-80 bg-canvas rounded-[12px] border border-ink/12 p-3 z-50 max-h-[480px] overflow-y-auto scrollbar-hover">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-ink/12 px-1">
+                  <p className="text-xs font-bold uppercase tracking-wider text-ink/60">
+                    Jump to Screen (Dev)
+                  </p>
+                  <button
+                    type="button"
+                    onClick={restartFlow}
+                    className="min-h-[44px] px-2 text-xs text-accent font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <RotateCcw size={16} />
+                    <span>Restart</span>
+                  </button>
+                </div>
+
+                <div className="space-y-1">
+                  {Object.entries(SCREENS).map(([key, item]) => {
+                    const isActive = currentScreen === key;
+                    const IconComp = item.icon || Compass;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => navigate(key)}
+                        className={`w-full min-h-[44px] text-left px-3 py-2 rounded-[8px] text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
+                          isActive
+                            ? 'bg-ink text-canvas'
+                            : 'text-ink/60 hover:text-ink hover:bg-ink/8'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <IconComp size={16} className={isActive ? 'text-canvas' : 'text-ink/60'} />
+                          <span>{item.label}</span>
+                        </div>
+                        {item.badge && (
+                          <Badge variant="status" inverted={isActive}>
+                            {item.badge}
+                          </Badge>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Right Controls: Notification bell & Primary Solid Pill Action */}
+        <div className="flex items-center gap-3">
+          {!isAuthenticated ? (
+            <>
               <button
                 type="button"
-                onClick={() => setSwitcherOpen(!switcherOpen)}
-                className="min-h-[44px] flex items-center gap-2 px-3 py-2 rounded-full bg-canvas border border-ink/12 hover:border-ink/24 text-xs font-semibold text-ink transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                onClick={() => navigate('login')}
+                className="min-h-[44px] px-4 py-2 rounded-full border border-ink/12 bg-canvas text-ink text-xs font-semibold hover:bg-ink/8 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
-                <span>Screen: {SCREENS[currentScreen]?.label}</span>
-                <ChevronDown
-                  size={16}
-                  className={`transition-transform duration-150 text-ink/60 ${
-                    switcherOpen ? 'rotate-180' : ''
-                  }`}
-                />
+                Log in
               </button>
+              <button
+                type="button"
+                onClick={() => navigate('signup')}
+                className="min-h-[44px] px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:brightness-90 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                Sign up
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Notification Bell */}
+              <NotificationBell onNavigate={navigate} />
 
-              {switcherOpen && (
-                <div className="absolute top-full right-0 sm:left-1/2 sm:-translate-x-1/2 mt-2 w-72 sm:w-80 bg-canvas rounded-[12px] border border-ink/12 p-3 z-50 max-h-[480px] overflow-y-auto scrollbar-hover">
-                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-ink/12 px-1">
-                    <p className="text-xs font-bold uppercase tracking-wider text-ink/60">
-                      Jump to Screen (Dev)
-                    </p>
+              {/* Mobile-only avatar menu */}
+              <div className="relative md:hidden">
+                <button
+                  type="button"
+                  onClick={() => setAvatarMenuOpen((prev) => !prev)}
+                  aria-label={`${currentInitials}, account menu`}
+                  aria-expanded={avatarMenuOpen}
+                  className="min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center hover:bg-ink/8 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <Avatar
+                    initials={currentInitials}
+                    username={currentUsername}
+                    hasUnseenReel={currentUserHasUnseenReel}
+                    size={36}
+                  />
+                </button>
+
+                {avatarMenuOpen && (
+                  <div
+                    role="menu"
+                    aria-label="Account menu"
+                    className="absolute right-0 mt-2 w-60 bg-canvas rounded-[12px] border border-ink/12 shadow-float p-3 z-50 space-y-2"
+                  >
+                    <div className="px-2 pb-2 border-b border-ink/12 space-y-1">
+                      <p className="text-sm font-semibold text-ink truncate">
+                        @{currentUsername}
+                      </p>
+                      <p className="text-xs text-ink/60 truncate">
+                        {[user?.branch || state.branch, (user?.year || state.year || '').replace(/\s*Year$/i, '') && `${(user?.year || state.year || '').replace(/\s*Year$/i, '')} Year`].filter(Boolean).join(' • ')}
+                      </p>
+                      <Badge variant="status" icon={ShieldCheck}>
+                        {institution.networkLabel}
+                      </Badge>
+                    </div>
                     <button
                       type="button"
-                      onClick={restartFlow}
-                      className="min-h-[44px] px-2 text-xs text-accent font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                      role="menuitem"
+                      onClick={() => navigate('profile')}
+                      className="w-full min-h-[44px] px-2 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
                     >
-                      <RotateCcw size={16} />
-                      <span>Restart</span>
+                      <Lock size={16} />
+                      <span>Personal space</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => navigate('settings')}
+                      className="w-full min-h-[44px] px-2 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
+                    >
+                      <Sliders size={16} />
+                      <span>Settings & Privacy</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={async () => {
+                        setAvatarMenuOpen(false);
+                        await logOut();
+                        navigate('welcome');
+                      }}
+                      className="w-full min-h-[44px] px-2 py-2 rounded-[8px] text-left text-xs font-semibold text-danger hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
+                    >
+                      <LogOut size={16} />
+                      <span>Log out</span>
                     </button>
                   </div>
+                )}
+              </div>
 
-                  <div className="space-y-1">
-                    {Object.entries(SCREENS).map(([key, item]) => {
-                      const isActive = currentScreen === key;
-                      const IconComp = item.icon || Compass;
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => navigate(key)}
-                          className={`w-full min-h-[44px] text-left px-3 py-2 rounded-[8px] text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
-                            isActive
-                              ? 'bg-ink text-canvas'
-                              : 'text-ink/60 hover:text-ink hover:bg-ink/8'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <IconComp size={16} className={isActive ? 'text-canvas' : 'text-ink/60'} />
-                            <span>{item.label}</span>
-                          </div>
-                          {item.badge && (
-                            <Badge variant="status" inverted={isActive}>
-                              {item.badge}
-                            </Badge>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Right Global Actions: Mobile Avatar Menu + Notification Bell + ONE accent Post pill button */}
-          <div className="flex items-center gap-2">
-            {!isAuthenticated ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => navigate('login')}
-                  className="min-h-[44px] px-4 py-2 rounded-full border border-ink/12 bg-canvas text-ink text-xs font-semibold hover:bg-ink/8 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  Log in
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('signup')}
-                  className="min-h-[44px] px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:brightness-90 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                >
-                  Sign up
-                </button>
-              </>
-            ) : (
-              <>
-                <NotificationBell onNavigate={navigate} />
-
-                {/* Mobile-only avatar menu (desktop uses the sidebar footer) */}
-                <div className="relative md:hidden">
+              {/* Primary Action: Solid Blue + Post with Dropdown Segment */}
+              <div className="relative hidden md:block" ref={postMenuRef}>
+                <div className="inline-flex rounded-[8px] bg-accent overflow-hidden min-h-[44px]">
                   <button
                     type="button"
-                    onClick={() => setAvatarMenuOpen((prev) => !prev)}
-                    aria-label={`${currentInitials}, account menu`}
-                    aria-expanded={avatarMenuOpen}
-                    className="min-h-[44px] min-w-[44px] rounded-full flex items-center justify-center hover:bg-ink/8 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    onClick={() => {
+                      setPostMenuOpen(false);
+                      setIsCreateModalOpen(true);
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 text-canvas text-sm font-medium hover:brightness-95 active:scale-[0.98] transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canvas"
                   >
-                    <Avatar
-                      initials={currentInitials}
-                      username={currentUsername}
-                      hasUnseenReel={currentUserHasUnseenReel}
-                      size={36}
-                    />
+                    <Plus size={18} strokeWidth={2.5} aria-hidden="true" />
+                    <span>Post</span>
                   </button>
-
-                  {avatarMenuOpen && (
-                    <div
-                      role="menu"
-                      aria-label="Account menu"
-                      className="absolute right-0 mt-2 w-60 bg-canvas rounded-[12px] border border-ink/12 shadow-float p-3 z-50 space-y-2"
-                    >
-                      <div className="px-2 pb-2 border-b border-ink/12 space-y-1">
-                        <p className="text-sm font-semibold text-ink truncate">
-                          @{currentUsername}
-                        </p>
-                        <p className="text-xs text-ink/60 truncate">
-                          {[user?.branch || state.branch, (user?.year || state.year || '').replace(/\s*Year$/i, '') && `${(user?.year || state.year || '').replace(/\s*Year$/i, '')} Year`].filter(Boolean).join(' • ')}
-                        </p>
-                        <Badge variant="status" icon={ShieldCheck}>
-                          {institution.networkLabel}
-                        </Badge>
-                      </div>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => navigate('profile')}
-                        className="w-full min-h-[44px] px-2 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
-                      >
-                        <Lock size={16} />
-                        <span>Personal space</span>
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => navigate('settings')}
-                        className="w-full min-h-[44px] px-2 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
-                      >
-                        <Sliders size={16} />
-                        <span>Settings & Privacy</span>
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={async () => {
-                          setAvatarMenuOpen(false);
-                          await logOut();
-                          navigate('welcome');
-                        }}
-                        className="w-full min-h-[44px] px-2 py-2 rounded-[8px] text-left text-xs font-semibold text-danger hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
-                      >
-                        <LogOut size={16} />
-                        <span>Log out</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                <div className="relative hidden md:block" ref={postMenuRef}>
                   <button
                     type="button"
+                    aria-label="Create reel or thread"
                     aria-haspopup="menu"
                     aria-expanded={postMenuOpen}
                     onClick={() => {
@@ -782,64 +803,56 @@ function AppShell() {
                       setAvatarMenuOpen(false);
                       setSwitcherOpen(false);
                     }}
-                    className="inline-flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-full bg-accent text-canvas text-xs font-semibold hover:brightness-90 transition-opacity cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    className="px-2 py-2 text-canvas/90 hover:text-canvas hover:brightness-95 border-l border-canvas/20 flex items-center justify-center active:scale-[0.98] transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canvas"
                   >
-                    <Plus size={16} strokeWidth={2.5} aria-hidden="true" />
-                    <span>Post</span>
-                    <ChevronDown size={14} aria-hidden="true" />
+                    <ChevronDown size={18} aria-hidden="true" className={postMenuOpen ? 'rotate-180 transition-transform' : 'transition-transform'} />
                   </button>
-
-                  {postMenuOpen && (
-                    <div
-                      role="menu"
-                      aria-label="Create content menu"
-                      className="absolute right-0 mt-2 w-44 bg-canvas rounded-[12px] border border-ink/12 p-1 z-50 shadow-lg space-y-1"
-                    >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setPostMenuOpen(false);
-                          setIsCreateModalOpen(true);
-                        }}
-                        className="w-full min-h-[40px] px-3 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
-                      >
-                        <PenSquare size={15} />
-                        <span>Post</span>
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setPostMenuOpen(false);
-                          setIsCreateReelModalOpen(true);
-                        }}
-                        className="w-full min-h-[40px] px-3 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
-                      >
-                        <Film size={15} />
-                        <span>Reel</span>
-                      </button>
-                    </div>
-                  )}
                 </div>
-              </>
-            )}
-          </div>
+
+                {postMenuOpen && (
+                  <div
+                    role="menu"
+                    aria-label="Create content menu"
+                    className="absolute right-0 mt-2 w-44 bg-canvas rounded-[12px] border border-ink/12 p-1 z-50 shadow-lg space-y-1"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setPostMenuOpen(false);
+                        setIsCreateModalOpen(true);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
+                    >
+                      <PenSquare size={15} />
+                      <span>Post</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setPostMenuOpen(false);
+                        setIsCreateReelModalOpen(true);
+                      }}
+                      className="w-full min-h-[40px] px-3 py-2 rounded-[8px] text-left text-xs font-semibold text-ink hover:bg-ink/8 flex items-center gap-2 cursor-pointer"
+                    >
+                      <Film size={15} />
+                      <span>Reel</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </header>
 
       {/* ═══════════ MAIN CONTENT BODY ═══════════ */}
-      <div
-        className={
-          isReelsPage
-            ? 'flex-1 w-full mx-0 px-0 py-0'
-            : 'flex-1 w-full max-w-[1600px] mx-auto px-6 lg:px-8 py-6'
-        }
-      >
+      <div className={isReelsPage ? 'flex-1 w-full mx-0 px-0 py-0' : 'flex-1 w-full'}>
         {/* If viewing Auth Screens, display centered web layout */}
         {isAuthScreen ? (
           ['welcome', 'signup', 'login', 'forgot_password'].includes(currentScreen) ? (
-            <div className="w-full">
+            <div className="w-full quad-auth-page-wrapper">
               <CurrentComponent
                 onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
                 onNavigate={navigate}
@@ -847,7 +860,7 @@ function AppShell() {
               />
             </div>
           ) : (
-            <div className="max-w-xl mx-auto w-full my-4">
+            <div className="max-w-xl mx-auto w-full my-4 quad-auth-page-wrapper px-4">
               {/* Context Notice for legacy walkthroughs */}
               <div className="mb-4 flex items-center justify-between px-2 text-xs text-ink/60">
                 <span className="flex items-center gap-2 font-medium">
@@ -874,7 +887,7 @@ function AppShell() {
           )
         ) : !isAuthenticated ? (
           /* Public Guest View (Terms, Privacy, Safety): NEVER expose authenticated Feed sidebar or right rail */
-          <main className="max-w-3xl mx-auto w-full my-2">
+          <main className="max-w-3xl mx-auto w-full my-2 quad-auth-page-wrapper px-4">
             <CurrentComponent
               onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
               onNavigate={navigate}
@@ -882,12 +895,9 @@ function AppShell() {
             />
           </main>
         ) : (
-          /* Responsive Web App Layout (>=1100px 3-col, or 2-col on Reels without right rail) */
-          <div
-            style={{ '--sidebar-width': isSidebarPinned ? '240px' : '72px' } as React.CSSProperties}
-            className={`quad-shell-grid ${currentScreen === 'reels' ? 'quad-shell-grid--reels' : ''}`}
-          >
-            {/* ──── COLUMN 1: UNIFIED NAVIGATION RAIL (72px / 240px hover & pin) ──── */}
+          /* Responsive Web App Layout (Reference Layout: Fixed Left Rail, Centered Feed, Fixed Right Rail) */
+          <div className="relative min-h-screen">
+            {/* ──── COLUMN 1: UNIFIED NAVIGATION RAIL (72px collapsed / 240px hover) ──── */}
             <NavigationRail
               currentScreen={currentScreen}
               unseenReelsCount={unseenReelsCount}
@@ -899,13 +909,182 @@ function AppShell() {
               onLogOut={logOut}
               isPinned={isSidebarPinned}
               onTogglePin={toggleSidebarPin}
+              onOpenCreatePost={() => setIsCreateModalOpen(true)}
+              onOpenCreateReel={() => setIsCreateReelModalOpen(true)}
               footer={<QuadLegalFooter onNavigate={navigate} />}
               isReelsPage={isReelsPage}
             />
 
-            {/* ──── COLUMN 2: CENTER FLEXIBLE COLUMN ──── */}
-            <main className={isReelsPage ? 'min-w-0 w-full quad-main--reels' : 'min-w-0 w-full pb-12 mb-8 md:pb-6 md:mb-0'}>
-              <div className="w-full">
+            {currentScreen === 'feed' ? (
+              /* ──── MAIN FEED LAYOUT (Reference Design: Centered Feed + Fixed Right Rail) ──── */
+              <div className="quad-feed-layout">
+                <main className="quad-feed-main-col py-6 px-4">
+                  <CurrentComponent
+                    onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
+                    onNavigate={navigate}
+                    onBack={goBack}
+                    onViewWeekItem={setSelectedWeekItem}
+                    onOpenCreateReel={() => setIsCreateReelModalOpen(true)}
+                    initialReelId={deepLinkReelId}
+                    targetPostId={deepLinkPostId}
+                    targetThreadId={deepLinkThreadId}
+                    initialTab={deepLinkTab}
+                    onOpenPeerProfile={(targetUsername, fallbackPeer) => {
+                      navigate('profile', { user: targetUsername });
+                      setSelectedProfilePeer(
+                        fallbackPeer || {
+                          id: targetUsername,
+                          username: targetUsername,
+                          initials: targetUsername.slice(0, 2).toUpperCase(),
+                          branch: null,
+                          year: null,
+                        }
+                      );
+                    }}
+                  />
+                </main>
+
+                {/* ──── RIGHT CONTEXTUAL RAIL (Fixed 340px column, Desktop only) ──── */}
+                <aside
+                  aria-label="Campus Contextual Sidebar"
+                  className="quad-feed-right-sidebar border-l border-ink/12 bg-canvas p-4 overflow-y-auto space-y-6 hidden lg:block select-none"
+                >
+                  {/* CARD 1: THIS WEEK */}
+                  <ThisWeekCard
+                    items={state.thisWeekEvents || []}
+                    onViewItem={setSelectedWeekItem}
+                  />
+
+                  {/* CARD 2: WHO TO FOLLOW (Peer Suggestions) */}
+                  <section
+                    aria-label="Who to follow"
+                    className="rounded-xl border border-ink/12 p-4 bg-canvas space-y-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold tracking-wider text-ink/60 uppercase">
+                        WHO TO FOLLOW
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => navigate('discover')}
+                        className="min-h-[44px] px-1 text-xs font-semibold text-accent hover:underline cursor-pointer rounded-[8px] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      >
+                        Directory
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {spotlightPeers.length === 0 ? (
+                        <p className="text-xs text-ink/60 py-2">
+                          No new suggestions right now.
+                        </p>
+                      ) : (
+                        spotlightPeers.map((peer) => {
+                          const isFollowing = Boolean(peer.isFollowing);
+                          const isRequested = Boolean(peer.isRequested) || requestedPeerIds.has(peer.id);
+                          return (
+                            <div
+                              key={peer.id}
+                              className="flex items-center justify-between gap-2 py-1 rounded-[8px] hover:bg-ink/6 px-1 transition-colors"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setSelectedProfilePeer(peer)}
+                                className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-[8px]"
+                              >
+                                <Avatar
+                                  initials={peer.initials}
+                                  username={peer.username}
+                                  size={36}
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1">
+                                    <p className="text-xs font-semibold text-ink truncate">
+                                      @{peer.username}
+                                    </p>
+                                    <ShieldCheck size={14} className="text-accent shrink-0" aria-hidden="true" />
+                                  </div>
+                                  <p className="text-xs text-ink/60 truncate">
+                                    {[peer.branch, peer.year].filter(Boolean).join(' • ')}
+                                  </p>
+                                </div>
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={isFollowing || isRequested}
+                                onClick={() => togglePeerRequest(peer)}
+                                aria-pressed={isFollowing || isRequested}
+                                className={`min-h-[44px] px-3 py-2 rounded-[8px] text-xs font-semibold inline-flex items-center gap-1 transition-colors duration-150 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default ${
+                                  isFollowing || isRequested
+                                    ? 'bg-canvas text-ink border border-ink/12'
+                                    : 'bg-ink/8 hover:bg-ink/12 text-ink'
+                                }`}
+                              >
+                                {(isFollowing || isRequested) && (
+                                  <Check size={14} className="text-ink shrink-0" />
+                                )}
+                                <span>
+                                  {isFollowing ? 'Following' : isRequested ? 'Requested' : 'Follow'}
+                                </span>
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </section>
+
+                  {/* CARD 3: CAMPUS DISCUSSIONS */}
+                  <section
+                    aria-label="Campus discussions"
+                    className="rounded-xl border border-ink/12 p-4 bg-canvas space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={16} className="text-ink shrink-0" aria-hidden="true" />
+                        <span className="text-xs font-bold tracking-wider text-ink/60 uppercase">
+                          CAMPUS DISCUSSIONS
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      {trendingTopics.map((topic) => (
+                        <button
+                          key={topic.tag}
+                          type="button"
+                          onClick={() => {
+                            try {
+                              sessionStorage.setItem('quad_pending_search', topic.tag);
+                            } catch {
+                              // storage unavailable: the feed simply opens unfiltered
+                            }
+                            navigate('feed');
+                            window.dispatchEvent(new Event('quad:pending-search'));
+                          }}
+                          className="w-full min-h-[44px] text-left px-2 py-2 rounded-[8px] hover:bg-ink/8 transition-colors flex items-center justify-between group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        >
+                          <span className="text-[13px] font-medium text-accent group-hover:underline">
+                            {topic.tag}
+                          </span>
+                          <span className="text-xs text-ink/60">
+                            {topic.posts} {topic.posts === 1 ? 'post' : 'posts'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+
+                  {/* Subtle Legal & Honor Code Footer */}
+                  <footer className="pt-4 border-t border-ink/8 text-xs text-ink/50 leading-relaxed px-2">
+                    <QuadLegalFooter onNavigate={navigate} />
+                  </footer>
+                </aside>
+              </div>
+            ) : isReelsPage ? (
+              /* ──── REELS FULL VIEWPORT LAYOUT ──── */
+              <div className="w-full quad-main--reels min-h-screen">
                 <CurrentComponent
                   onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
                   onNavigate={navigate}
@@ -929,148 +1108,39 @@ function AppShell() {
                     );
                   }}
                 />
-
-                {/* Single-place Footer when Right Rail is hidden (<1100px), omitted on Reels */}
-                {currentScreen !== 'reels' && (
-                  <footer className="quad-inline-footer mt-8 pt-4 border-t border-ink/12 px-2">
+              </div>
+            ) : (
+              /* ──── OTHER AUTHENTICATED PAGES (Directory, Threads, Profile, Settings, etc.) ──── */
+              <div className="quad-subpage-layout">
+                <main className="max-w-4xl w-full mx-auto py-6 px-4">
+                  <CurrentComponent
+                    onNext={(screen?: string) => navigate(screen || getNextScreen(currentScreen))}
+                    onNavigate={navigate}
+                    onBack={goBack}
+                    onViewWeekItem={setSelectedWeekItem}
+                    onOpenCreateReel={() => setIsCreateReelModalOpen(true)}
+                    initialReelId={deepLinkReelId}
+                    targetPostId={deepLinkPostId}
+                    targetThreadId={deepLinkThreadId}
+                    initialTab={deepLinkTab}
+                    onOpenPeerProfile={(targetUsername, fallbackPeer) => {
+                      navigate('profile', { user: targetUsername });
+                      setSelectedProfilePeer(
+                        fallbackPeer || {
+                          id: targetUsername,
+                          username: targetUsername,
+                          initials: targetUsername.slice(0, 2).toUpperCase(),
+                          branch: null,
+                          year: null,
+                        }
+                      );
+                    }}
+                  />
+                  <footer className="mt-8 pt-4 border-t border-ink/12 px-2">
                     <QuadLegalFooter onNavigate={navigate} />
                   </footer>
-                )}
+                </main>
               </div>
-            </main>
-
-            {/* ──── COLUMN 3: RIGHT CONTEXTUAL RAIL (>=1100px only, 340px; hidden on Reels page) ──── */}
-            {currentScreen !== 'reels' && (
-              <aside className="quad-right-rail w-full sticky top-20 self-start max-h-[calc(100dvh-5.5rem)] overflow-y-auto pt-1 pb-6">
-              {/* This week card */}
-              <div className="shrink-0">
-                <ThisWeekCard
-                  items={state.thisWeekEvents || []}
-                  onViewItem={setSelectedWeekItem}
-                />
-              </div>
-
-              {/* Who to follow */}
-              <section
-                aria-label="Who to follow"
-                className="shrink-0 p-4 rounded-[12px] bg-canvas border border-ink/12 space-y-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-ink whitespace-nowrap">
-                    Who to follow
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => navigate('discover')}
-                    className="min-h-[44px] px-1 text-xs font-semibold text-accent hover:underline cursor-pointer rounded-[8px] shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    Directory
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {spotlightPeers.length === 0 ? (
-                    <p className="text-xs text-ink/60 py-2">
-                      No new suggestions right now.
-                    </p>
-                  ) : (
-                    spotlightPeers.map((peer) => {
-                      const isFollowing = Boolean(peer.isFollowing);
-                      const isRequested = Boolean(peer.isRequested) || requestedPeerIds.has(peer.id);
-                      return (
-                        <div
-                          key={peer.id}
-                          className="flex items-center justify-between gap-2 py-1 rounded-[8px] hover:bg-ink/6 px-1 transition-colors"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => setSelectedProfilePeer(peer)}
-                            className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-[8px]"
-                          >
-                            <Avatar
-                              initials={peer.initials}
-                              username={peer.username}
-                              size={36}
-                            />
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-ink truncate">
-                                @{peer.username}
-                              </p>
-                              <p className="text-xs text-ink/60 truncate">
-                                {[peer.branch, peer.year].filter(Boolean).join(' • ')}
-                              </p>
-                            </div>
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={isFollowing || isRequested}
-                            onClick={() => togglePeerRequest(peer)}
-                            aria-pressed={isFollowing || isRequested}
-                            className={`min-h-[44px] px-3 py-2 rounded-[8px] text-xs font-semibold inline-flex items-center gap-1 transition-colors duration-150 cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-default ${
-                              isFollowing || isRequested
-                                ? 'bg-canvas text-ink border border-ink/12'
-                                : 'bg-ink/8 hover:bg-ink/12 text-ink'
-                            }`}
-                          >
-                            {(isFollowing || isRequested) && (
-                              <Check size={14} className="text-ink shrink-0" />
-                            )}
-                            <span>
-                              {isFollowing ? 'Following' : isRequested ? 'Requested' : 'Follow'}
-                            </span>
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </section>
-
-              {/* Campus discussions */}
-              <section
-                aria-label="Campus discussions"
-                className="shrink-0 p-4 rounded-[12px] bg-canvas border border-ink/12 space-y-2"
-              >
-                <div className="flex items-center gap-2">
-                  <Sparkles size={16} className="text-ink shrink-0" aria-hidden="true" />
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-ink">
-                    Campus discussions
-                  </h3>
-                </div>
-
-                <div className="space-y-1">
-                  {trendingTopics.map((topic) => (
-                    <button
-                      key={topic.tag}
-                      type="button"
-                      onClick={() => {
-                        try {
-                          sessionStorage.setItem('quad_pending_search', topic.tag);
-                        } catch {
-                          // storage unavailable: the feed simply opens unfiltered
-                        }
-                        navigate('feed');
-                        window.dispatchEvent(new Event('quad:pending-search'));
-                      }}
-                      className="w-full min-h-[44px] text-left px-2 py-2 rounded-[8px] hover:bg-ink/8 transition-colors flex items-center justify-between group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      <span className="text-[13px] font-medium text-accent group-hover:underline">
-                        {topic.tag}
-                      </span>
-                      <span className="text-xs text-ink/60">
-                        {topic.posts} {topic.posts === 1 ? 'post' : 'posts'}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-                {/* Footer: Terms, Privacy, Help (normal flow at bottom of right column) */}
-                <footer className="shrink-0 pt-2 border-t border-ink/12 px-2">
-                  <QuadLegalFooter onNavigate={navigate} />
-                </footer>
-              </aside>
             )}
           </div>
         )}

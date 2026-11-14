@@ -129,7 +129,7 @@ export function PeerProfileModal({
     return () => {
       cancelled = true;
     };
-  }, [username, fallbackPeer, state.discoverableUsers, state.following, state.publicPosts, state.username, state.whoToFollow]);
+  }, [username, fallbackPeer, state.discoverableUsers, state.following, state.publicPosts, state.reels, state.username, state.whoToFollow]);
 
   const handleFollowAction = async () => {
     if (!profile?.user?.username || requestBusy) return;

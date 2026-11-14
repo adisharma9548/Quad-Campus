@@ -121,7 +121,7 @@ export function Button({
       className={`inline-flex items-center justify-center select-none transition-all duration-150 cursor-pointer ${
         variantStyles[normalizedVariant] || variantStyles.primary
       } ${sizeStyles[size] || sizeStyles.md} ${fullWidth ? 'w-full' : ''} ${
-        isInteractive ? 'active:scale-[0.98]' : ''
+        isInteractive ? 'btn-press' : ''
       } ${
         disabled
           ? 'opacity-30 cursor-not-allowed pointer-events-none'
@@ -593,31 +593,31 @@ export function Modal({
           aria-modal="true"
           aria-labelledby={title ? 'modal-title' : undefined}
         >
-          {/* Backdrop */}
+          {/* Backdrop (Staging the Focus #3) */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
             onClick={onClose}
-            className="fixed inset-0 bg-ink/60 backdrop-blur-xs cursor-pointer"
+            className="fixed inset-0 bg-ink/60 backdrop-blur-sm cursor-pointer"
           />
 
-          {/* Dialog Container */}
+          {/* Dialog Container (Pose to pose #4, Slow in/out #6, Solid Drawing in 3D #11) */}
           <motion.div
             ref={dialogRef}
             initial={
               isSheet
                 ? { opacity: 0, y: 100 }
-                : { opacity: 0, scale: 0.95, y: 16 }
+                : { opacity: 0, scale: 0.94, y: 12 }
             }
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={
               isSheet
                 ? { opacity: 0, y: 100 }
-                : { opacity: 0, scale: 0.95, y: 16 }
+                : { opacity: 0, scale: 0.94, y: 12 }
             }
-            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
             className={`relative w-full ${sizeClasses[size] || sizeClasses.md} bg-canvas border border-ink/12 rounded-[12px] p-6 z-10 ${
               isSheet ? 'mt-auto sm:my-auto' : 'my-auto'
             }`}

@@ -50,16 +50,14 @@ export function NotificationBell({ onNavigate }: NotificationBellProps) {
         aria-label={label}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="relative min-h-[44px] min-w-[44px] rounded-full bg-canvas border border-ink/12 text-ink hover:bg-ink/8 transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="relative w-11 h-11 rounded-[8px] flex items-center justify-center text-ink/60 hover:text-ink hover:bg-ink/6 active:scale-[0.98] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         <Bell size={20} aria-hidden="true" />
         {unread > 0 && (
           <span
             aria-hidden="true"
-            className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-accent text-canvas text-[11px] font-bold leading-5 text-center"
-          >
-            {unread > 9 ? '9+' : unread}
-          </span>
+            className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-accent border border-canvas"
+          />
         )}
       </button>
 
